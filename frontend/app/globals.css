@@ -1,0 +1,93 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: #f4f6fb;
+  color: #1a2233;
+}
+
+.samd-band {
+  background: #fff3cd;
+  border-bottom: 1px solid #e0c36a;
+  color: #6b5410;
+  padding: 8px 16px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #e3e8f0;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(15, 30, 70, 0.06);
+}
+
+.btn {
+  display: inline-block;
+  background: #2456d6;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.btn:hover { background: #1c46b4; }
+.btn.secondary { background: #eef2fb; color: #2456d6; }
+.btn.danger { background: #c0392b; }
+.btn.success { background: #1e8e4e; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+input, textarea, select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #ccd4e0;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge.pending { background: #fff3cd; color: #6b5410; }
+.badge.approved { background: #d9f2e2; color: #14663a; }
+.badge.rejected { background: #fde3e0; color: #8f2317; }
+.badge.kvkk { background: #e5f0ff; color: #1c46b4; }
+
+.anon-panel li { margin: 4px 0; }
+.anon-ok { color: #14663a; }
+.hl-token { border-radius: 4px; padding: 0 3px; }
+
+table.list { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.list th, table.list td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #edf0f6; }
+table.list th { color: #66708a; font-weight: 600; }
+
+.navbar {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  background: #101a33;
+  color: #fff;
+  padding: 12px 24px;
+}
+.navbar a { color: #cdd8f5; text-decoration: none; font-size: 14px; }
+.navbar a:hover { color: #fff; }
+.navbar .brand { font-weight: 700; color: #fff; margin-right: 12px; }

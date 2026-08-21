@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# JavaScript
+node_modules/
+.next/
+playwright-report/
+test-results/
+
+# Local configuration and generated data
+.env
+postgres-data/
+
+# Local DB / build artifacts
+*.db
+*.whl
+.DS_Store
