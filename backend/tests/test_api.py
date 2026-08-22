@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import os
 import tempfile
+import uuid
 
-os.environ.setdefault("DATABASE_URL", f"sqlite:///{tempfile.gettempdir()}/pulsar-test.db")
+os.environ.setdefault(
+    "DATABASE_URL",
+    f"sqlite:///{tempfile.gettempdir()}/pulsar-test-{os.getpid()}-{uuid.uuid4().hex[:8]}.db",
+)
 
 import pytest
 from fastapi.testclient import TestClient

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -15,14 +16,27 @@ from ...services.embeddings import similar_cases
 router = APIRouter(prefix="/v1/analyses", tags=["analyses"])
 
 
+def _strip_cams(vision: dict | None) -> dict | None:
+    """Base64 CAM görüntülerini yanıttan çıkarır (payload ~1.8MB → KB'lar)."""
+    if not vision:
+        return vision
+    out = dict(vision)
+    out["findings"] = [
+        {**f, "cam_image_b64": None} if isinstance(f, dict) else f
+        for f in out.get("findings", [])
+    ]
+    return out
+
+
 def _analysis_out(a: Analysis) -> AnalysisOut:
     return AnalysisOut(
         id=a.id,
         study_id=a.study_id,
         status=a.status,
         fusion_risk_score=a.fusion_risk_score,
-        vision_result=a.vision_result,
+        vision_result=_strip_cams(a.vision_result),
         nlp_result=a.nlp_result,
+        ecg_result=a.ecg_result,
         created_at=a.created_at,
         decided_at=a.decided_at,
     )
@@ -32,10 +46,21 @@ def _analysis_out(a: Analysis) -> AnalysisOut:
 def list_analyses(status_filter: str | None = None,
                   user: User = Depends(get_current_user),
                   db: Session = Depends(get_db)) -> list[dict]:
+    """Hafif liste projeksiyonu — ağır analiz kolonları (vision/nlp/ecg)
+    dökülmez; aksi halde her satır MB'larca base64 taşır."""
     q = db.query(Analysis).order_by(Analysis.created_at.desc())
     if status_filter:
         q = q.filter(Analysis.status == status_filter)
-    return [_analysis_out(a).model_dump() for a in q.limit(100)]
+    return [
+        {
+            "id": a.id,
+            "study_id": a.study_id,
+            "status": a.status,
+            "fusion_risk_score": a.fusion_risk_score,
+            "created_at": a.created_at.isoformat(),
+        }
+        for a in q.limit(100)
+    ]
 
 
 @router.get("/{analysis_id}")
@@ -56,6 +81,24 @@ def get_analysis(analysis_id: str,
         for d in analysis.decisions
     ]
     return out
+
+
+@router.get("/{analysis_id}/cam")
+def get_cam(analysis_id: str,
+            user: User = Depends(get_current_user),
+            db: Session = Depends(get_db)) -> dict:
+    """CAM overlay'i ayrı ve tek istekle döner (lazy-load)."""
+    analysis = db.get(Analysis, analysis_id)
+    if not analysis or not analysis.vision_result:
+        raise HTTPException(404, "Görüntü analizi bulunamadı")
+    for f in analysis.vision_result.get("findings", []):
+        if isinstance(f, dict) and f.get("cam_image_b64"):
+            return {
+                "label": f.get("label"),
+                "cam_image_b64": f["cam_image_b64"],
+                "xai_method": analysis.vision_result.get("xai_method"),
+            }
+    raise HTTPException(404, "Bu analiz için CAM üretilmemiş")
 
 
 @router.post("/{analysis_id}/decision", response_model=DecisionOut)
@@ -104,3 +147,46 @@ def similar(analysis_id: str,
             user: User = Depends(get_current_user),
             db: Session = Depends(get_db)) -> list[dict]:
     return similar_cases(db, analysis_id)
+
+
+@router.get("/{analysis_id}/signal")
+def get_signal(analysis_id: str,
+               user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)) -> dict:
+    """Saklanan EKG sinyalini viewer icin JSON olarak dondurur.
+
+    Sinyal, kayit bazli z-skor on islemesinden HAM haliyle degil,
+    goruntulemeye uygun normalize edilmis sekilde akitilir.
+    """
+    from ...core.config import settings
+
+    analysis = db.get(Analysis, analysis_id)
+    if not analysis or not analysis.ecg_result:
+        raise HTTPException(404, "EKG analizi bulunamadı")
+    fname = (analysis.ecg_result or {}).get("_file")
+    if not fname:
+        raise HTTPException(404, "Bu analiz için saklanmış sinyal yok")
+    # path traversal korumasi: yalnizca guvenli dosya adi kabul
+    safe = Path(fname).name
+    fpath = Path(settings.ecg_upload_dir) / safe
+    if not fpath.exists():
+        raise HTTPException(410, "Sinyal dosyasi bulunamadi")
+
+    from io import BytesIO
+
+    from scipy.io import loadmat
+
+    m = loadmat(BytesIO(fpath.read_bytes()))
+    val = m["val"]
+    leads = ["I", "II", "III", "aVR", "aVL", "aVF",
+             "V1", "V2", "V3", "V4", "V5", "V6"]
+    n = min(val.shape[-1], 5000)
+    step = max(1, n // 2500)
+    sig = [[round(float(v), 3) for v in row[:n:step]] for row in val[:12]]
+    return {
+        "analysis_id": analysis_id,
+        "leads": leads,
+        "fs_effective": 500 // step,
+        "samples": len(sig[0]),
+        "signal": sig,
+    }

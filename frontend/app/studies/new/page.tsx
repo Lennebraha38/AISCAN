@@ -6,9 +6,11 @@ import { useRouter } from "next/navigation";
 import { api, getTokens } from "../../../lib/api";
 import {
   cleanDicom,
+  cleanHea,
   hashAnonId,
   maskEpikriz,
   type DicomCleanReport,
+  type HeaCleanReport,
   type PiiFinding,
 } from "../../../lib/browser-anonymizer";
 
@@ -18,7 +20,11 @@ import {
  */
 export default function NewStudyPage() {
   const router = useRouter();
+  const [modalityKind, setModalityKind] = useState<"image" | "ecg">("image");
   const [file, setFile] = useState<File | null>(null);
+  const [heaFile, setHeaFile] = useState<File | null>(null);
+  const [heaReport, setHeaReport] = useState<HeaCleanReport | null>(null);
+  const [cleanedHeaText, setCleanedHeaText] = useState("");
   const [epikriz, setEpikriz] = useState("");
   const [maskedEpikriz, setMaskedEpikriz] = useState("");
   const [piiFindings, setPiiFindings] = useState<PiiFinding[]>([]);
@@ -56,6 +62,25 @@ export default function NewStudyPage() {
     }
   }
 
+  async function onEcgPicked(mat: File, hea: File | null) {
+    setFile(mat);
+    setHeaFile(hea);
+    setHeaReport(null);
+    setCleanedHeaText("");
+    setError("");
+    try {
+      if (hea) {
+        const text = await hea.text();
+        const { text: cleaned, report } = await cleanHea(text, "pulsar-ecg-salt");
+        setCleanedHeaText(cleaned);
+        setHeaReport(report);
+      }
+      setAnonHash(await hashAnonId(`${mat.name}:${mat.size}:${mat.lastModified}`, "pulsar-ecg-salt"));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "EKG dosyası işlenemedi");
+    }
+  }
+
   function onEpikrizChange(text: string) {
     setEpikriz(text);
     const result = maskEpikriz(text);
@@ -70,7 +95,7 @@ export default function NewStudyPage() {
     try {
       const study = await api.createStudy({
         anon_study_hash: anonHash,
-        modality: file?.name.toLowerCase().endsWith(".dcm") ? "CR" : "CR",
+        modality: modalityKind === "ecg" ? "ECG" : "CR",
         image_count: file ? 1 : 0,
         masked_epikriz: maskedEpikriz || null,
         anonymization_report: dicomReport
@@ -82,7 +107,10 @@ export default function NewStudyPage() {
           : null,
       });
       let analysisId: string | null = null;
-      if (cleanedBytes) {
+      if (modalityKind === "ecg" && file) {
+        const res = await api.analyzeEcgStudy(study.id, file, "signal.mat");
+        analysisId = res.analysis_id;
+      } else if (cleanedBytes) {
         const blob = new Blob([cleanedBytes as unknown as BlobPart], { type: "application/dicom" });
         const res = await api.analyzeStudy(study.id, blob, "anonymized.dcm");
         analysisId = res.analysis_id;
@@ -114,7 +142,81 @@ export default function NewStudyPage() {
       </div>
 
       <div className="card">
-        <h3>1. Görüntü (DICOM / PNG / JPEG)</h3>
+        <h3>1. Çalışma Türü</h3>
+        <label style={{ marginRight: 18 }}>
+          <input
+            type="radio"
+            checked={modalityKind === "ecg"}
+            onChange={() => setModalityKind("ecg")}
+          />{" "}
+          EKG Kaydı (12 derivasyon, WFDB)
+        </label>
+        <label>
+          <input
+            type="radio"
+            checked={modalityKind === "image"}
+            onChange={() => setModalityKind("image")}
+          />{" "}
+          Radyoloji Görüntüsü (DICOM / PNG / JPEG)
+        </label>
+      </div>
+
+      {modalityKind === "ecg" ? (
+        <div className="card">
+          <h3>2. EKG Sinyali (.mat + .hea)</h3>
+          <p style={{ fontSize: 13, color: "#66708a" }}>
+            PhysioNet WFDB formatı: <code>.mat</code> sinyal verisi (PHI içermez),
+            <code> .hea</code> başlık dosyası (PHI içerebilir — tarayıcıda temizlenir,
+            <strong> sunucuya asla gönderilmez</strong>).
+          </p>
+          <input
+            type="file"
+            accept=".mat"
+            onChange={(e) => {
+              const mat = e.target.files?.[0];
+              if (mat) onEcgPicked(mat, heaFile);
+            }}
+          />{" "}
+          <input
+            type="file"
+            accept=".hea"
+            placeholder=".hea (opsiyonel)"
+            onChange={(e) => {
+              const hea = e.target.files?.[0];
+              if (hea && file) onEcgPicked(file, hea);
+            }}
+          />
+          {heaReport && (
+            <div className="anon-panel">
+              <strong>.hea Temizleme Raporu:</strong>
+              <ul>
+                {heaReport.recordPseudonym && (
+                  <li className="anon-ok">✓ Kayıt kimliği → SHA256 pseudonym ({heaReport.recordPseudonym.slice(0, 8)}…)</li>
+                )}
+                {heaReport.ageBanded && <li className="anon-ok">✓ Yaş → {heaReport.ageBanded} bandına indirgendi</li>}
+                {heaReport.sexRemoved && <li className="anon-ok">✓ Cinsiyet kaldırıldı</li>}
+                {heaReport.maskedFields.map((t) => (
+                  <li key={t} className="anon-ok">✓ Serbest metin maskelendi: {t}</li>
+                ))}
+                <li className="anon-ok">✓ Dx (teşhis) kodları korunur — klinik değer için zorunlu</li>
+              </ul>
+              {cleanedHeaText && (
+                <>
+                  <h4>Temizlenmiş başlık (sunucuya gitmez):</h4>
+                  <pre style={{ background: "#f7f9fd", padding: 10, borderRadius: 8, fontSize: 12 }}>
+                    {cleanedHeaText}
+                  </pre>
+                </>
+              )}
+            </div>
+          )}
+          {!heaReport && file && (
+            <p className="anon-ok">✓ Sinyal hazır; .mat ikili verisi kimlik bilgisi taşımaz.</p>
+          )}
+        </div>
+      ) : (
+      <div className="card">
+        <h3>2. Görüntü (DICOM / PNG / JPEG)</h3>
         <input
           type="file"
           accept=".dcm,.png,.jpg,.jpeg,application/dicom"
@@ -140,9 +242,10 @@ export default function NewStudyPage() {
           <p className="anon-ok">✓ Görüntü kimlik bilgisi taşımıyor; parmak izi hash'i üretildi.</p>
         )}
       </div>
+      )}
 
       <div className="card">
-        <h3>2. Epikriz Metni</h3>
+        <h3>3. Epikriz Metni</h3>
         <textarea
           rows={6}
           placeholder="Hasta epikrizini buraya yapıştırın... (PII otomatik maskelenir)"

@@ -18,3 +18,14 @@ postgres-data/
 *.db
 *.whl
 .DS_Store
+
+# EKG veri kumesi (buyuk dosyalar - yeniden uretilebilir)
+data/ecg/hea/
+data/ecg/raw/
+data/ecg/manifest.jsonl
+data/ecg_uploads/
+ai-core/models/
+data/ecg/cache/
+*.npy
+frontend/tsconfig.tsbuildinfo
+data/*.zip

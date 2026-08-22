@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 
+import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from .nlp import analyze_epikriz
@@ -18,8 +19,11 @@ from .schemas import (
     TokenAttributionOut,
     VisionResponse,
     FindingOut,
+    EcgAnalyzeRequest,
+    EcgAnalyzeResponse,
 )
 from .vision import FINDING_LABELS, analyze_image, produce_cam_overlay
+from .ecg.inference import get_analyzer
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_MIME = {"image/jpeg", "image/png", "application/dicom", "application/octet-stream"}
@@ -35,8 +39,51 @@ def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         service="ai-core",
-        models="loaded" if _MODEL_HOLDER["model"] else "heuristic-engine",
-        xai_backend="grad-cam" if _MODEL_HOLDER["model"] else "energy-saliency",
+        models=f"ecg:{get_analyzer().backend} + vision:"
+        + ("loaded" if _MODEL_HOLDER["model"] else "heuristic-engine"),
+        xai_backend="grad-cam" if _MODEL_HOLDER["model"] or get_analyzer().model is not None
+        else "energy-saliency",
+    )
+
+
+@app.post("/v1/ecg/analyze", response_model=EcgAnalyzeResponse, tags=["ecg"])
+async def ecg_analyze(payload: EcgAnalyzeRequest) -> EcgAnalyzeResponse:
+    """12 derivasyonlu EKG analizi: ust sinif + guven + XAI haritalari.
+
+    Girdi: base64 .mat dosyasi veya dogrudan 12xN sinyal matrisi.
+    Cikti, hekim onayi icin viewer'a tasinir; tek basina tanı DEGILDIR.
+    """
+    analyzer = get_analyzer()
+    if payload.mat_b64:
+        try:
+            signal, fs = analyzer.decode_mat(payload.mat_b64)
+        except Exception as exc:
+            raise HTTPException(422, f".mat cozumleme hatasi: {exc}") from exc
+    elif payload.signal:
+        try:
+            signal = np.asarray(payload.signal, dtype=np.float64)
+        except ValueError as exc:
+            raise HTTPException(422, "sinyal matrisi okunamadi") from exc
+        if signal.ndim != 2 or signal.shape[0] != 12:
+            raise HTTPException(422, "12 derivasyon bekleniyor (ilk boyut=12)")
+        if signal.size > 12 * 50000:
+            raise HTTPException(413, "sinyal cok buyuk (max 12x50000)")
+        fs = int(payload.fs)
+    else:
+        raise HTTPException(400, "'mat_b64' veya 'signal' alanlarindan biri zorunlu")
+
+    result = analyzer.analyze_signal(signal, fs)
+    return EcgAnalyzeResponse(
+        superclass=result["superclass"],
+        superclass_index=result["superclass_index"],
+        confidence=result["confidence"],
+        probabilities=result["probabilities"],
+        grad_cam=result["grad_cam"],
+        lead_saliency=result["lead_saliency"],
+        heart_rate_bpm=result.get("heart_rate_bpm"),
+        backend=result["backend"],
+        xai_method=result["xai_method"],
+        rationale=result.get("rationale", ""),
     )
 
 
@@ -59,14 +106,16 @@ async def vision_analyze(
     cam_b64, _heat = produce_cam_overlay(data, model=_MODEL_HOLDER["model"],
                                          target_layers=_MODEL_HOLDER["target_layers"])
 
+    # Ayni overlay 7 kez kopyalanmasin: yalniz ilk bulgu tasiyor,
+    # digerleri backend /cam endpoint'i üzerinden ayni goruntuye erisir.
     findings = [
         FindingOut(
             label=label,
             probability=result["probabilities"].get(label, 0.0),
-            cam_image_b64=cam_b64,
+            cam_image_b64=cam_b64 if idx == 0 else None,
             top_regions=result["top_regions"],
         )
-        for label in FINDING_LABELS
+        for idx, label in enumerate(FINDING_LABELS)
     ]
     return VisionResponse(
         findings=findings,

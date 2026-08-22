@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from .core.config import settings
 from .models import init_db, make_engine
@@ -25,6 +26,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Büyük JSON yanıtlarını (analiz, sinyal) sıkıştırır.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 engine = make_engine(settings.database_url)
 

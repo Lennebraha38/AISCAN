@@ -59,11 +59,27 @@ export const api = {
     request<
       { id: string; anon_study_hash: string; modality: string; created_at: string; has_epikriz: boolean }[]
     >("/v1/studies"),
+  getStudy: (id: string) =>
+    request<{
+      id: string;
+      anon_study_hash: string;
+      modality: string;
+      created_at: string;
+      analyses: { id: string; status: string; fusion_risk_score: number }[];
+    }>(`/v1/studies/${id}`),
   createStudy: (body: Record<string, unknown>) =>
     request<{ id: string }>("/v1/studies", { method: "POST", body: JSON.stringify(body) }),
   analyzeStudy: (studyId: string, file: Blob, filename: string) => {
     const form = new FormData();
     form.append("image", file, filename);
+    return request<{ analysis_id: string; status: string; fusion_risk_score: number }>(
+      `/v1/studies/${studyId}/analyze`,
+      { method: "POST", body: form },
+    );
+  },
+  analyzeEcgStudy: (studyId: string, file: Blob, filename: string) => {
+    const form = new FormData();
+    form.append("signal_file", file, filename);
     return request<{ analysis_id: string; status: string; fusion_risk_score: number }>(
       `/v1/studies/${studyId}/analyze`,
       { method: "POST", body: form },
@@ -77,8 +93,15 @@ export const api = {
       fusion_risk_score: number;
       vision_result: VisionResult | null;
       nlp_result: NlpResult | null;
+      ecg_result: EcgResult | null;
       decisions: { decision: string; note: string | null; decided_at: string }[];
     }>(`/v1/analyses/${id}`),
+  getCam: (id: string) =>
+    request<{ label: string | null; cam_image_b64: string; xai_method?: string }>(
+      `/v1/analyses/${id}/cam`,
+    ),
+  getEcgSignal: (id: string) =>
+    request<EcgSignal>(`/v1/analyses/${id}/signal`),
   decide: (id: string, decision: "APPROVED" | "REJECTED", note?: string) =>
     request<Record<string, unknown>>(`/v1/analyses/${id}/decision`, {
       method: "POST",
@@ -118,4 +141,25 @@ export interface NlpResult {
   confidence: number;
   highlighted_tokens: HighlightedToken[];
   rationale: string;
+}
+
+export interface EcgResult {
+  superclass: "normal" | "arrhythmia" | "block" | string;
+  superclass_index: number;
+  confidence: number;
+  probabilities: Record<string, number>;
+  grad_cam: number[];
+  lead_saliency: number[][];
+  heart_rate_bpm?: number | null;
+  backend: string;
+  xai_method: string;
+  rationale?: string;
+}
+
+export interface EcgSignal {
+  analysis_id: string;
+  leads: string[];
+  fs_effective: number;
+  samples: number;
+  signal: number[][];
 }

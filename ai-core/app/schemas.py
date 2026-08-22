@@ -53,3 +53,24 @@ class HealthResponse(BaseModel):
     service: str
     models: str
     xai_backend: str
+
+
+class EcgAnalyzeRequest(BaseModel):
+    """Ya base64 .mat dosyasi ya da dogrudan 12xN sinyal matrisi."""
+
+    mat_b64: str | None = None
+    signal: list[list[float]] | None = None
+    fs: int = 500
+
+
+class EcgAnalyzeResponse(BaseModel):
+    superclass: str
+    superclass_index: int
+    confidence: float
+    probabilities: dict[str, float]
+    grad_cam: list[float]
+    lead_saliency: list[list[float]]
+    heart_rate_bpm: float | None = None
+    backend: str
+    xai_method: str
+    rationale: str = ""

@@ -51,10 +51,12 @@ class Study(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     anon_study_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    modality: Mapped[str] = mapped_column(String(8), default="CR")
+    modality: Mapped[str] = mapped_column(String(8), default="CR")  # CR|DX|ECG
     image_count: Mapped[int] = mapped_column(Integer, default=1)
     masked_epikriz: Mapped[str | None] = mapped_column(Text, nullable=True)
     anonymization_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # EKG calismalari icin teknik meta (fs, derivasyon sayisi, sure) - PII icermez
+    ecg_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -68,6 +70,8 @@ class Analysis(Base):
     study_id: Mapped[str] = mapped_column(ForeignKey("studies.id"), index=True)
     vision_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     nlp_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # EKG motoru ciktisi: ust sinif + guven + XAI haritalari
+    ecg_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     fusion_risk_score: Mapped[float] = mapped_column(Float, default=0.0)
     # MDR human-in-the-loop: analiz hekim onayı olmadan kesinleşmez.
     status: Mapped[str] = mapped_column(String(20), default="PENDING_REVIEW")

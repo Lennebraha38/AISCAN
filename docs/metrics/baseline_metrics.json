@@ -1,0 +1,54 @@
+{
+  "model": "HistGradientBoosting+handcrafted",
+  "macro_f1": 0.6929,
+  "report": {
+    "normal": {
+      "precision": 0.8174037089871612,
+      "recall": 0.8911353032659409,
+      "f1-score": 0.8526785714285714,
+      "support": 643.0
+    },
+    "arrhythmia": {
+      "precision": 0.6894977168949772,
+      "recall": 0.703416149068323,
+      "f1-score": 0.6963873943120676,
+      "support": 644.0
+    },
+    "block": {
+      "precision": 0.6133333333333333,
+      "recall": 0.46621621621621623,
+      "f1-score": 0.5297504798464492,
+      "support": 296.0
+    },
+    "accuracy": 0.7353126974099811,
+    "macro avg": {
+      "precision": 0.7067449197384906,
+      "recall": 0.6869225561834934,
+      "f1-score": 0.6929388151956961,
+      "support": 1583.0
+    },
+    "weighted avg": {
+      "precision": 0.7272102218735165,
+      "recall": 0.7353126974099811,
+      "f1-score": 0.7287125365761793,
+      "support": 1583.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      573,
+      61,
+      9
+    ],
+    [
+      113,
+      453,
+      78
+    ],
+    [
+      15,
+      143,
+      138
+    ]
+  ]
+}

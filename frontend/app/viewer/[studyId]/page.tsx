@@ -8,7 +8,9 @@ import {
   type NlpResult,
   type VisionFinding,
   type VisionResult,
+  type EcgResult,
 } from "../../../lib/api";
+import EcgPanel from "../../../components/EcgPanel";
 
 /**
  * DICOM Viewer + XAI paneli.
@@ -21,9 +23,11 @@ export default function ViewerPage() {
   const [analysisId, setAnalysisId] = useState<string | null>(search.get("analysis"));
   const [vision, setVision] = useState<VisionResult | null>(null);
   const [nlp, setNlp] = useState<NlpResult | null>(null);
+  const [ecg, setEcg] = useState<EcgResult | null>(null);
   const [status, setStatus] = useState<string>("");
   const [riskScore, setRiskScore] = useState<number>(0);
   const [selectedFinding, setSelectedFinding] = useState<string | null>(null);
+  const [sharedCam, setSharedCam] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -33,17 +37,39 @@ export default function ViewerPage() {
       const a = await api.getAnalysis(id);
       setStatus(a.status);
       setRiskScore(a.fusion_risk_score);
-      if (a.vision_result) setVision(a.vision_result);
+      if (a.vision_result) {
+        setVision(a.vision_result);
+        // CAM artik ana yanitta tasinmiyor; ayri hafif istekle cekilir.
+        if (!a.ecg_result) {
+          api.getCam(id).then((c) => setSharedCam(c.cam_image_b64)).catch(() => {});
+        }
+      }
       if (a.nlp_result) setNlp(a.nlp_result);
+      if (a.ecg_result) {
+        // ic dosya anahtarini API'ye tasimayalim
+        const { _file, ...ecgOut } = a.ecg_result as EcgResult & { _file?: string };
+        setEcg(ecgOut);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Analiz yüklenemedi");
     }
   }, []);
 
   useEffect(() => {
-    if (!analysisId) return;
-    loadAnalysis(analysisId);
-  }, [analysisId, loadAnalysis]);
+    if (analysisId) {
+      loadAnalysis(analysisId);
+      return;
+    }
+    // Panelden gelen linkte ?analysis= parametresi yok: en güncel analizi çöz.
+    api
+      .getStudy(studyId)
+      .then((s) => {
+        const latest = (s.analyses ?? [])[0];
+        if (latest) setAnalysisId(latest.id);
+        else setError("Bu çalışma için henüz analiz üretilmemiş");
+      })
+      .catch(() => setError("Çalışma yüklenemedi"));
+  }, [analysisId, loadAnalysis, studyId]);
 
   async function runAnalysis() {
     setBusy(true);
@@ -76,7 +102,11 @@ export default function ViewerPage() {
     findings.find((f) => f.label === selectedFinding) ??
     findings.find((f) => f.probability > 0.5) ??
     findings[0];
-  const camSrc = active?.cam_image_b64 ? `data:image/png;base64,${active.cam_image_b64}` : null;
+  const camSrc = active?.cam_image_b64
+    ? `data:image/png;base64,${active.cam_image_b64}`
+    : sharedCam
+      ? `data:image/png;base64,${sharedCam}`
+      : null;
 
   const urgencyColor =
     nlp?.urgency === "yüksek" ? "#c0392b" : nlp?.urgency === "orta" ? "#b7791f" : "#1e8e4e";
@@ -115,12 +145,14 @@ export default function ViewerPage() {
       <nav className="navbar" style={{ margin: "-24px -16px 16px", borderRadius: 8 }}>
         <Link href="/dashboard">← Panel</Link>
         <span style={{ flex: 1 }} />
-        <span className={`badge ${status.toLowerCase()}`}>
-          {status === "PENDING_REVIEW"
-            ? "⏳ HEKİM ONAYI BEKLİYOR"
-            : status === "APPROVED"
-              ? "✓ RAPOR KESİNLEŞTİ"
-              : "✗ REDDEDİLDİ"}
+        <span className={`badge ${status ? status.toLowerCase() : "loading"}`}>
+          {status === ""
+            ? "… YÜKLENİYOR"
+            : status === "PENDING_REVIEW"
+              ? "⏳ HEKİM ONAYI BEKLİYOR"
+              : status === "APPROVED"
+                ? "✓ RAPOR KESİNLEŞTİ"
+                : "✗ REDDEDİLDİ"}
         </span>
       </nav>
 
@@ -132,7 +164,11 @@ export default function ViewerPage() {
       {error && <p style={{ color: "#c0392b" }}>{error}</p>}
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-        {/* ---- Viewer + CAM overlay ---- */}
+        {/* ---- EKG Viewer + XAI ---- */}
+        {ecg && analysisId && <EcgPanel result={ecg} analysisId={analysisId} />}
+
+        {/* ---- Görüntü + CAM overlay (radyoloji calismalari) ---- */}
+        {!ecg && (
         <div className="card" style={{ flex: 2, minWidth: 380 }}>
           <h3>Görüntü + Grad-CAM Isı Haritası</h3>
           {!camSrc && (
@@ -212,6 +248,7 @@ export default function ViewerPage() {
             </tbody>
           </table>
         </div>
+        )}
 
         {/* ---- Epikriz XAI + Onay ---- */}
         <div style={{ flex: 1, minWidth: 320 }}>

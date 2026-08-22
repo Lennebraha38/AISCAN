@@ -264,3 +264,82 @@ export async function cleanDicom(
   }
   return { bytes: out, report };
 }
+
+// ---------------------------------------------------------------------------
+// WFDB .hea (EKG basligi) anonimlestirme — Python ecg_deid TS portu
+// ---------------------------------------------------------------------------
+
+export interface HeaCleanReport {
+  recordPseudonym: string | null;
+  ageBanded: string | null;
+  sexRemoved: boolean;
+  maskedFields: string[];
+}
+
+function ageBand(age: number): string {
+  const lo = Math.floor(age / 10) * 10;
+  return `${lo}-${lo + 9}`;
+}
+
+/** WFDB .hea metnini istemcide KVKK uyumlu hale getirir. */
+export async function cleanHea(content: string, salt: string): Promise<{ text: string; report: HeaCleanReport }> {
+  const lines = content.split(/\r?\n/);
+  const report: HeaCleanReport = {
+    recordPseudonym: null,
+    ageBanded: null,
+    sexRemoved: false,
+    maskedFields: [],
+  };
+  let originalId: string | null = null;
+  let pseudo: string | null = null;
+  const out: string[] = [];
+
+  for (const line of lines) {
+    if (!line.startsWith("#")) {
+      // teknik satir: kayit adi / .mat referansi pseudonymize edilir
+      const m = line.match(/^([A-Za-z]{2}\d{5})(\.mat)?\b/);
+      if (m) {
+        if (!originalId) {
+          originalId = m[1];
+          pseudo = (await sha256Hex(salt + originalId)).slice(0, 16);
+          report.recordPseudonym = pseudo;
+        }
+        out.push(line.replace(originalId, pseudo as string));
+      } else {
+        out.push(line);
+      }
+      continue;
+    }
+    const fm = line.match(/^#(Age|Sex|Dx|Rx|Hx|Sx):\s*(.*)$/);
+    if (!fm) {
+      out.push(line);
+      continue;
+    }
+    const name = fm[1];
+    const value = fm[2];
+    if (name === "Age") {
+      const age = parseInt(value, 10);
+      if (!Number.isNaN(age)) {
+        report.ageBanded = `${age} -> ${ageBand(age)}`;
+        out.push(`#Age: ${ageBand(age)}`);
+      } else {
+        out.push("");
+      } 
+    } else if (name === "Sex") {
+      report.sexRemoved = true;
+      out.push("");
+    } else if (name === "Rx" || name === "Hx" || name === "Sx") {
+      // serbest metin: temel maskeleme uygula
+      const res = maskEpikriz(value);
+      if (res.findings.length) {
+        report.maskedFields.push(`${name} (${res.findings.length} PII)`);
+        out.push(`#${name}: ${res.maskedText}`);
+      } else {
+        out.push(line);
+      }
+    } else {
+      out.push(line); // Dx korunur
+    }
+  }
+  return { text: out.join("\n") + "\n", report };
+}

@@ -37,6 +37,7 @@ class StudyCreate(BaseModel):
     image_count: int = 1
     masked_epikriz: str | None = None
     anonymization_report: dict | None = None
+    ecg_meta: dict | None = None  # {fs, leads, samples, dx_codes} - PII icermez
 
 
 class StudyOut(BaseModel):
@@ -55,6 +56,7 @@ class AnalysisOut(BaseModel):
     fusion_risk_score: float
     vision_result: dict | None
     nlp_result: dict | None
+    ecg_result: dict | None = None
     created_at: datetime
     decided_at: datetime | None
 
