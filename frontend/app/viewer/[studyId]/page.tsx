@@ -28,6 +28,7 @@ export default function ViewerPage() {
   const [riskScore, setRiskScore] = useState<number>(0);
   const [selectedFinding, setSelectedFinding] = useState<string | null>(null);
   const [sharedCam, setSharedCam] = useState<string | null>(null);
+  const [showRegions, setShowRegions] = useState(true);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -190,6 +191,42 @@ export default function ViewerPage() {
             <div style={{ position: "relative", borderRadius: 8, overflow: "hidden" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={camSrc} alt="Grad-CAM bindirilmiş görüntü" style={{ width: "100%", display: "block" }} />
+              {active && showRegions && !!active.top_regions?.length && (
+                <svg
+                  viewBox="0 0 3 3"
+                  preserveAspectRatio="none"
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+                >
+                  {[...active.top_regions]
+                    .sort((a, b) => b.energy - a.energy)
+                    .slice(0, 3)
+                    .map((r, i) => (
+                      <g key={`${r.row}-${r.col}`}>
+                        <rect
+                          x={r.col + 0.04}
+                          y={r.row + 0.04}
+                          width={0.92}
+                          height={0.92}
+                          rx={0.08}
+                          fill={`rgba(255,209,102,${Math.max(0.08, r.energy * 2)})`}
+                          stroke={i === 0 ? "#ffd166" : "rgba(255,209,102,.55)"}
+                          strokeWidth={i === 0 ? 0.05 : 0.03}
+                        />
+                        <text
+                          x={r.col + 0.14}
+                          y={r.row + 0.34}
+                          fontSize={0.3}
+                          fontWeight="700"
+                          fill="#fff"
+                          stroke="#101a33"
+                          strokeWidth={0.02}
+                        >
+                          {i + 1}
+                        </text>
+                      </g>
+                    ))}
+                </svg>
+              )}
               <div
                 style={{
                   position: "absolute",
@@ -203,11 +240,22 @@ export default function ViewerPage() {
                 }}
               >
                 XAI yöntemi: {vision?.xai_method} · overlay %40 opaklık
+                {active && showRegions && !!active.top_regions?.length && (
+                  <span style={{ color: "#ffd166" }}>
+                    {" "}
+                    · «{active.label}» bölgeleri
+                  </span>
+                )}
               </div>
             </div>
           )}
 
-          <h4 style={{ marginBottom: 6 }}>Bulgu Listesi</h4>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <h4 style={{ marginBottom: 6 }}>Bulgu Listesi</h4>
+            <button className="btn secondary" style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => setShowRegions((v) => !v)}>
+              {showRegions ? "Bölgeleri Gizle" : "Bölgeleri Göster"}
+            </button>
+          </div>
           <table className="list">
             <thead>
               <tr>
@@ -218,7 +266,14 @@ export default function ViewerPage() {
             </thead>
             <tbody>
               {findings.map((f) => (
-                <tr key={f.label} style={{ background: f.label === active?.label ? "#f3f8ff" : undefined }}>
+                <tr
+                  key={f.label}
+                  onClick={() => setSelectedFinding((cur) => (cur === f.label ? null : f.label))}
+                  style={{
+                    background: f.label === active?.label ? "#f3f8ff" : undefined,
+                    cursor: "pointer",
+                  }}
+                >
                   <td>{f.label}</td>
                   <td>
                     <div style={{ background: "#edf0f6", borderRadius: 6, width: 140, height: 10 }}>
@@ -234,8 +289,14 @@ export default function ViewerPage() {
                     <small>{(f.probability * 100).toFixed(1)}%</small>
                   </td>
                   <td>
-                    <button className="btn secondary" onClick={() => setSelectedFinding(f.label)}>
-                      Bölgeyi Göster
+                    <button
+                      className={f.label === selectedFinding ? "btn" : "btn secondary"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedFinding((cur) => (cur === f.label ? null : f.label));
+                      }}
+                    >
+                      {f.label === selectedFinding ? "✓ Seçili" : "Bölgeyi Göster"}
                     </button>
                   </td>
                 </tr>
