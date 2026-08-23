@@ -32,17 +32,30 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const resp = await fetch(`${API_URL}${path}`, { ...init, headers });
-  if (resp.status === 401) {
+  let resp: Response;
+  try {
+    resp = await fetch(`${API_URL}${path}`, { ...init, headers });
+  } catch {
+    throw new Error(
+      `Sunucuya ulaşılamıyor (${API_URL}). Bağlantıyı ve servis durumunu kontrol edin.`
+    );
+  }
+  if (resp.status === 401 && path !== "/v1/auth/login") {
     clearTokens();
     window.location.href = "/login";
     throw new Error("Oturum süresi doldu");
   }
   if (!resp.ok) {
-    let detail = `${resp.status}`;
+    let detail = "";
     try {
-      detail = (await resp.json()).detail ?? detail;
+      detail = (await resp.json()).detail ?? "";
     } catch {}
+    if (!detail) {
+      detail =
+        resp.status >= 500 || resp.status === 530
+          ? "Sunucu şu anda yanıt vermiyor, lütfen tekrar deneyin."
+          : `İstek başarısız (${resp.status})`;
+    }
     throw new Error(detail);
   }
   return resp.json() as Promise<T>;

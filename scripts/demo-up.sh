@@ -12,7 +12,7 @@ sleep 5
 echo "[2/5] Eski tunel kapatiliyor, yenisini aciliyor..."
 pgrep -f "[c]loudflared tunnel" | xargs -r kill 2>/dev/null
 sleep 1
-setsid nohup "$LOG/cloudflared" tunnel --url http://localhost:8000 > "$LOG/tunnel.log" 2>&1 < /dev/null &
+setsid nohup "$LOG/cloudflared" tunnel --url http://localhost:8000 --protocol http2 > "$LOG/tunnel.log" 2>&1 < /dev/null &
 
 URL=""
 for i in $(seq 1 20); do
