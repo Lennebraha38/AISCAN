@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import {
@@ -14,7 +14,6 @@ import EcgPanel from "../../../components/EcgPanel";
 
 /**
  * DICOM Viewer + XAI paneli.
- * Cornerstone.js viewport üzerine Grad-CAM ısı haritası %40 opaklıkta bindirilir.
  */
 export default function ViewerPage() {
   const params = useParams<{ studyId: string }>();
@@ -26,12 +25,7 @@ export default function ViewerPage() {
   const [ecg, setEcg] = useState<EcgResult | null>(null);
   const [status, setStatus] = useState<string>("");
   const [riskScore, setRiskScore] = useState<number>(0);
-  const [selectedFinding, setSelectedFinding] = useState<string | null>(null);
-  const [heatSrc, setHeatSrc] = useState<string | null>(null);
-  const [cleanSrc, setCleanSrc] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"heat" | "clean">("heat");
-  const [heatEmpty, setHeatEmpty] = useState(false);
-  const camCache = useRef<Map<string, { src: string; empty: boolean }>>(new Map());
+  const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,8 +37,6 @@ export default function ViewerPage() {
       setRiskScore(a.fusion_risk_score);
       if (a.vision_result) {
         setVision(a.vision_result);
-        // Isi haritalari ana yanitta tasinmiyor; aktif bulgu icin asagidaki
-        // useEffect bulgu-bazli /cam istegiyle ceker.
       }
       if (a.nlp_result) setNlp(a.nlp_result);
       if (a.ecg_result) {
@@ -73,6 +65,23 @@ export default function ViewerPage() {
       .catch(() => setError("Çalışma yüklenemedi"));
   }, [analysisId, loadAnalysis, studyId]);
 
+  // Duz calisma goruntusu (bindirme yok).
+  useEffect(() => {
+    if (!analysisId || ecg) return;
+    let alive = true;
+    api
+      .getCam(analysisId, { clean: true })
+      .then((c) => {
+        if (alive && c.cam_image_b64) {
+          setImgSrc(`data:image/png;base64,${c.cam_image_b64}`);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [analysisId, ecg]);
+
   async function runAnalysis() {
     setBusy(true);
     setError("");
@@ -100,65 +109,6 @@ export default function ViewerPage() {
   }
 
   const findings: VisionFinding[] = vision?.findings ?? [];
-  const active =
-    findings.find((f) => f.label === selectedFinding) ??
-    findings.find((f) => f.probability > 0.5) ??
-    findings[0];
-  const activeLabel = active?.label ?? null;
-
-  // Aktif bulgunun KENDI isi haritasini cek (bulgu basina ayri, cache'li).
-  useEffect(() => {
-    if (!analysisId || !activeLabel || viewMode !== "heat") return;
-    const key = `${analysisId}:${activeLabel}`;
-    const cached = camCache.current.get(key);
-    if (cached) {
-      setHeatSrc(cached.src);
-      setHeatEmpty(cached.empty);
-      return;
-    }
-    let alive = true;
-    api
-      .getCam(analysisId, { finding: activeLabel })
-      .then((c) => {
-        const entry = {
-          src: `data:image/png;base64,${c.cam_image_b64}`,
-          empty: !!c.empty,
-        };
-        camCache.current.set(key, entry);
-        if (alive) {
-          setHeatSrc(entry.src);
-          setHeatEmpty(entry.empty);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [analysisId, activeLabel, viewMode]);
-
-  function showClean() {
-    setViewMode("clean");
-    if (!analysisId) return;
-    const key = `${analysisId}:__base`;
-    const cached = camCache.current.get(key);
-    if (cached) {
-      setCleanSrc(cached.src);
-      return;
-    }
-    api
-      .getCam(analysisId, { clean: true })
-      .then((c) => {
-        const entry = { src: `data:image/png;base64,${c.cam_image_b64}`, empty: false };
-        camCache.current.set(key, entry);
-        setCleanSrc(entry.src);
-      })
-      .catch(() => {});
-  }
-
-  const camSrc =
-    viewMode === "clean"
-      ? cleanSrc
-      : heatSrc;
 
   const urgencyColor =
     nlp?.urgency === "yüksek" ? "#c0392b" : nlp?.urgency === "orta" ? "#b7791f" : "#1e8e4e";
@@ -219,27 +169,11 @@ export default function ViewerPage() {
         {/* ---- EKG Viewer + XAI ---- */}
         {ecg && analysisId && <EcgPanel result={ecg} analysisId={analysisId} />}
 
-        {/* ---- Görüntü + CAM overlay (radyoloji calismalari) ---- */}
+        {/* ---- Görüntü (radyoloji calismalari) ---- */}
         {!ecg && (
         <div className="card" style={{ flex: 2, minWidth: 380 }}>
-          <h3>Görüntü + Isı Haritası</h3>
-          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-            <button
-              className={viewMode === "heat" ? "btn" : "btn secondary"}
-              style={{ padding: "5px 12px", fontSize: 13 }}
-              onClick={() => setViewMode("heat")}
-            >
-              🌡 Isı Haritası
-            </button>
-            <button
-              className={viewMode === "clean" ? "btn" : "btn secondary"}
-              style={{ padding: "5px 12px", fontSize: 13 }}
-              onClick={showClean}
-            >
-              🖼 Temiz Görüntü
-            </button>
-          </div>
-          {!camSrc && (
+          <h3>Görüntü</h3>
+          {!imgSrc && (
             <div
               style={{
                 background: "#101a33",
@@ -254,44 +188,14 @@ export default function ViewerPage() {
               Analiz verisi bekleniyor…
             </div>
           )}
-          {camSrc && (
+          {imgSrc && (
             <div style={{ position: "relative", borderRadius: 8, overflow: "hidden" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={camSrc}
-                alt={viewMode === "clean" ? "Temiz görüntü" : "Bulgu ısı haritası"}
+                src={imgSrc}
+                alt="Çalışma görüntüsü"
                 style={{ width: "100%", display: "block" }}
               />
-              <div
-                style={{
-                  position: "absolute",
-                  left: 10,
-                  bottom: 10,
-                  background: "rgba(16,26,51,.78)",
-                  color: "#fff",
-                  padding: "6px 10px",
-                  borderRadius: 6,
-                  fontSize: 12,
-                }}
-              >
-                {viewMode === "clean" ? (
-                  <>Temiz görüntü · bindirme yok</>
-                ) : (
-                  <>
-                    XAI yöntemi: {vision?.xai_method}
-                    {active ? (
-                      <>
-                        {" "}
-                        · «{active.label}» ısı haritası{" "}
-                        <span style={{ color: "#ffd166" }}>
-                          ({(active.probability * 100).toFixed(0)}%)
-                        </span>
-                      </>
-                    ) : null}
-                    {heatEmpty ? " · belirgin yerel kanıt yok" : null}
-                  </>
-                )}
-              </div>
             </div>
           )}
 
@@ -301,19 +205,11 @@ export default function ViewerPage() {
               <tr>
                 <th>Bulgu</th>
                 <th>Olasılık</th>
-                <th></th>
               </tr>
             </thead>
             <tbody>
               {findings.map((f) => (
-                <tr
-                  key={f.label}
-                  onClick={() => setSelectedFinding((cur) => (cur === f.label ? null : f.label))}
-                  style={{
-                    background: f.label === active?.label ? "#f3f8ff" : undefined,
-                    cursor: "pointer",
-                  }}
-                >
+                <tr key={f.label}>
                   <td>{f.label}</td>
                   <td>
                     <div style={{ background: "#edf0f6", borderRadius: 6, width: 140, height: 10 }}>
@@ -328,22 +224,11 @@ export default function ViewerPage() {
                     </div>{" "}
                     <small>{(f.probability * 100).toFixed(1)}%</small>
                   </td>
-                  <td>
-                    <button
-                      className={f.label === selectedFinding ? "btn" : "btn secondary"}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedFinding((cur) => (cur === f.label ? null : f.label));
-                      }}
-                    >
-                      {f.label === selectedFinding ? "✓ Seçili" : "Bölgeyi Göster"}
-                    </button>
-                  </td>
                 </tr>
               ))}
               {!findings.length && (
                 <tr>
-                  <td colSpan={3} style={{ color: "#8a93ab" }}>Bulgu yok</td>
+                  <td colSpan={2} style={{ color: "#8a93ab" }}>Bulgu yok</td>
                 </tr>
               )}
             </tbody>
