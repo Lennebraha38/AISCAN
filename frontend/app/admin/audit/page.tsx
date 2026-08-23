@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import { api, getTokens } from "../../../lib/api";
 
@@ -15,11 +15,25 @@ interface AuditRow {
   created_at: string;
 }
 
+const ACTION_INFO: Record<string, { desc: string; icon: string }> = {
+  LOGIN: { desc: "Sisteme giriş yapıldı.", icon: "🔑" },
+  LOGIN_FAILED: { desc: "Başarısız giriş denemesi (hatalı e-posta veya şifre).", icon: "⛔" },
+  USER_CREATED: { desc: "Admin yeni bir kullanıcı hesabı açtı.", icon: "👤" },
+  PASSWORD_CHANGED: { desc: "Kullanıcı kendi şifresini değiştirdi.", icon: "🔒" },
+  STUDY_CREATED: { desc: "Yeni çalışma (anonim vaka) oluşturuldu.", icon: "🗂" },
+  ANALYSIS_CREATED: { desc: "Yapay zeka analizi üretildi ve hekim onayı bekliyor.", icon: "🧠" },
+  REPORT_DOWNLOADED: { desc: "Resmi rapor PDF'i indirildi.", icon: "📄" },
+  DECISION_APPROVED: { desc: "Hekim raporu ONAYLADI — rapor kesinleşti.", icon: "✅" },
+  DECISION_REJECTED: { desc: "Hekim raporu REDDETTİ.", icon: "❌" },
+};
+
 /** Yalnız admin: KVKK/MDR denetim kaydı görüntüleyici. */
 export default function AuditPage() {
   const [rows, setRows] = useState<AuditRow[] | null>(null);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [linkedStudy, setLinkedStudy] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const t = getTokens();
@@ -34,6 +48,22 @@ export default function AuditPage() {
       .then(setRows)
       .catch((e) => setError(e instanceof Error ? e.message : "Kayıtlar yüklenemedi"));
   }, []);
+
+  // Analiz olaylarında ilgili vakanın viewer linkini çöz.
+  async function resolveLink(row: AuditRow) {
+    if (row.entity_type !== "analysis" || !row.entity_id) return;
+    if (linkedStudy[row.entity_id] !== undefined) {
+      setOpenId(openId === row.id ? null : row.id);
+      return;
+    }
+    setOpenId(openId === row.id ? null : row.id);
+    try {
+      const a = await api.getAnalysis(row.entity_id);
+      setLinkedStudy((m) => ({ ...m, [row.entity_id as string]: a.study_id }));
+    } catch {
+      setLinkedStudy((m) => ({ ...m, [row.entity_id as string]: "" }));
+    }
+  }
 
   const shown = (rows ?? []).filter(
     (r) =>
@@ -53,7 +83,7 @@ export default function AuditPage() {
       <h1>Denetim Kaydı (Audit Trail)</h1>
       <p style={{ color: "#66708a", fontSize: 14 }}>
         KVKK/MDR uyumu için tüm kritik olaylar değişmez zaman damgasıyla kayıt altındadır
-        (son 200 kayıt). Her satır kullanıcı, işlem, nesne ve IP bilgisi taşır.
+        (son 200 kayıt). Detay için bir satıra tıklayın.
       </p>
       {error && <p style={{ color: "#c0392b" }}>{error}</p>}
 
@@ -68,29 +98,63 @@ export default function AuditPage() {
           <table className="list" style={{ marginTop: 12 }}>
             <thead>
               <tr>
+                <th></th>
                 <th>Zaman (UTC)</th>
                 <th>İşlem</th>
                 <th>Nesne</th>
                 <th>Kullanıcı</th>
                 <th>IP</th>
-                <th>Kayıt hash'i</th>
               </tr>
             </thead>
             <tbody>
-              {shown.map((r) => (
-                <tr key={r.id}>
-                  <td><small>{new Date(r.created_at + "Z").toLocaleString("tr-TR")}</small></td>
-                  <td>
-                    <strong>{r.action}</strong>
-                    <br />
-                    <small>{r.entity_type}</small>
-                  </td>
-                  <td><code>{(r.entity_id ?? "-").slice(0, 10)}…</code></td>
-                  <td><code>{(r.user_id ?? "-").slice(0, 8)}…</code></td>
-                  <td><small>{r.ip ?? "-"}</small></td>
-                  <td><small style={{ color: "#8a93ab" }}>{(r.data_hash ?? "").slice(0, 10)}</small></td>
-                </tr>
-              ))}
+              {shown.map((r) => {
+                const info = ACTION_INFO[r.action] ?? { desc: r.action, icon: "•" };
+                const open = openId === r.id;
+                const sid = r.entity_id ? linkedStudy[r.entity_id] : undefined;
+                return (
+                  <Fragment key={r.id}>
+                    <tr
+                      onClick={() => resolveLink(r)}
+                      style={{ cursor: "pointer", background: open ? "#f3f8ff" : undefined }}
+                    >
+                      <td>{open ? "▾" : "▸"}</td>
+                      <td><small>{new Date(r.created_at + "Z").toLocaleString("tr-TR")}</small></td>
+                      <td><strong>{info.icon} {r.action}</strong></td>
+                      <td><code>{(r.entity_id ?? "-").slice(0, 10)}…</code></td>
+                      <td><code>{(r.user_id ?? "-").slice(0, 8)}…</code></td>
+                      <td><small>{r.ip ?? "-"}</small></td>
+                    </tr>
+                    {open && (
+                      <tr>
+                        <td colSpan={6} style={{ background: "#fbfcff" }}>
+                          <div style={{ padding: "8px 14px", fontSize: 14 }}>
+                            <p style={{ margin: "4px 0" }}>{info.desc}</p>
+                            <table style={{ fontSize: 13, borderSpacing: "4px 2px" }}>
+                              <tbody>
+                                <tr><td style={{ color: "#66708a", paddingRight: 12 }}>Olay kimliği</td><td><code>{r.id}</code></td></tr>
+                                <tr><td style={{ color: "#66708a", paddingRight: 12 }}>Tam zaman</td><td><code>{r.created_at} UTC</code></td></tr>
+                                <tr><td style={{ color: "#66708a", paddingRight: 12 }}>Nesne türü / kimliği</td><td><code>{r.entity_type} · {r.entity_id ?? "-"}</code></td></tr>
+                                <tr><td style={{ color: "#66708a", paddingRight: 12 }}>Kullanıcı kimliği</td><td><code>{r.user_id ?? "(anonim/başarısız deneme)"}</code></td></tr>
+                                <tr><td style={{ color: "#66708a", paddingRight: 12 }}>Kaynak IP</td><td><code>{r.ip ?? "-"}</code></td></tr>
+                                <tr><td style={{ color: "#66708a", paddingRight: 12 }}>Kayıt bütünlük hash'i</td><td><code>{r.data_hash ?? "-"}</code></td></tr>
+                              </tbody>
+                            </table>
+                            {r.entity_type === "analysis" && (
+                              <p style={{ margin: "8px 0 2px" }}>
+                                {sid ? (
+                                  <Link href={`/viewer/${sid}`}>→ İlgili vakayı görüntüleyicide aç</Link>
+                                ) : (
+                                  <small style={{ color: "#8a93ab" }}>Vaka bağlantısı çözülüyor…</small>
+                                )}
+                              </p>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
               {rows && !shown.length && (
                 <tr><td colSpan={6} style={{ color: "#8a93ab" }}>Kayıt bulunamadı</td></tr>
               )}
