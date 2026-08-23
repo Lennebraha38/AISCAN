@@ -168,3 +168,47 @@ def analyze_image(image_bytes: bytes, modality: str = "CR") -> dict:
         # yalnız ham DICOM piksel dizisi verildiğinde anlamlıdır.
         img = hu_window(img * 255.0 - 1000.0)
     return analyze_array(img)
+
+
+def finding_saliency_map(img: np.ndarray, label: str) -> np.ndarray:
+    """Bulgu için gerçek mekânsal dikkat haritası ([0..1], IMG_SIZE kare).
+
+    Her bulgu sınıfının olasılığı belirli bir görüntü özelliğinden gelir;
+    harita da o özelliğin piksel-bazlı dağılımıdır. Böylece "hangi risk
+    nerede?" sorusuna bulgu-başına farklı, dürüst bir yanıt üretilir.
+    """
+    h, w = img.shape
+    mid = w // 2
+
+    def _norm(m: np.ndarray) -> np.ndarray:
+        hi = float(np.percentile(m, 99.5))
+        lo = float(np.percentile(m, 40))
+        return np.clip((m - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
+
+    if label in ("Atelektazi", "Efüzyon"):
+        left, right = img[:, :mid], img[:, mid:]
+        amap = np.abs(left.astype(np.float32) - right[:, ::-1])
+        m = np.empty((h, w), dtype=np.float32)
+        m[:, :mid] = amap
+        m[:, mid:] = amap[:, ::-1]
+        return _norm(m)
+    if label in ("İnfiltrasyon", "Pnömoni"):
+        return _norm(np.clip((img - 0.62) / 0.38, 0, 1))
+    if label == "Kütle/Nodül":
+        g = _gradient_magnitude(img)
+        thr = float(np.percentile(g, 97))
+        peak = max(float(g.max()) - thr, 1e-9)
+        return _norm(np.clip((g - thr) / peak, 0, 1))
+    if label == "Kardiomegali":
+        cm = img.mean(axis=0)
+        band = np.clip(cm - 0.55, 0, None)
+        band = band / max(float(band.max()), 1e-9)
+        return _norm(np.tile(band, (h, 1)))
+    if label == "Pnömotoraks":
+        margin = int(w * 0.15)
+        dark = np.clip(0.18 - img, 0, None) / 0.18
+        m = np.zeros_like(img)
+        m[:, :margin] = dark[:, :margin]
+        m[:, -margin:] = dark[:, -margin:]
+        return _norm(m)
+    return _norm(_gradient_magnitude(img))

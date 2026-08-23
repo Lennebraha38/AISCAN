@@ -8,6 +8,7 @@ class FindingOut(BaseModel):
     label: str
     probability: float
     cam_image_b64: str | None = None
+    cam_empty: bool = False
     top_regions: list[dict] = Field(default_factory=list)
 
 
@@ -16,6 +17,8 @@ class VisionResponse(BaseModel):
     risk_score: float
     features: dict = Field(default_factory=dict)
     xai_method: str
+    base_image_b64: str | None = None
+    modality: str | None = None
 
 
 class TokenAttributionOut(BaseModel):

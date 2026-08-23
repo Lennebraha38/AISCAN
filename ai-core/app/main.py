@@ -22,7 +22,8 @@ from .schemas import (
     EcgAnalyzeRequest,
     EcgAnalyzeResponse,
 )
-from .vision import FINDING_LABELS, analyze_image, produce_cam_overlay
+from .vision import FINDING_LABELS, analyze_image
+from .vision.cam import render_base_image, render_finding_overlay
 from .ecg.inference import get_analyzer
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -103,25 +104,30 @@ async def vision_analyze(
     _validate_upload(image, data)
 
     result = analyze_image(data, modality=modality)
-    cam_b64, _heat = produce_cam_overlay(data, model=_MODEL_HOLDER["model"],
-                                         target_layers=_MODEL_HOLDER["target_layers"])
 
-    # Ayni overlay 7 kez kopyalanmasin: yalniz ilk bulgu tasiyor,
-    # digerleri backend /cam endpoint'i üzerinden ayni goruntuye erisir.
-    findings = [
-        FindingOut(
-            label=label,
-            probability=result["probabilities"].get(label, 0.0),
-            cam_image_b64=cam_b64 if idx == 0 else None,
-            top_regions=result["top_regions"],
+    # Her bulgu KENDI mekânsal imzasindan uretilmis ayri overlay tasiyor;
+    # backend bunlari DB'de saklar, API yanitlarindan soyar ve /cam ile
+    # tek tek lazy-load eder. Ayrica 'temiz goruntu' icin taban PNG doner.
+    findings = []
+    for label in FINDING_LABELS:
+        p = result["probabilities"].get(label, 0.0)
+        cam_b64, cam_empty = render_finding_overlay(data, label, modality=modality, probability=p)
+        findings.append(
+            FindingOut(
+                label=label,
+                probability=p,
+                cam_image_b64=cam_b64,
+                cam_empty=cam_empty,
+                top_regions=result["top_regions"],
+            )
         )
-        for idx, label in enumerate(FINDING_LABELS)
-    ]
     return VisionResponse(
         findings=findings,
         risk_score=result["risk_score"],
         features=result["features"],
-        xai_method="grad-cam" if _MODEL_HOLDER["model"] else "energy-saliency+grid-attribution",
+        xai_method="grad-cam" if _MODEL_HOLDER["model"] else "finding-saliency (bulgu-bazlı)",
+        base_image_b64=render_base_image(data, modality=modality),
+        modality=modality,
     )
 
 

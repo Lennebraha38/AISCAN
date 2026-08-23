@@ -20,7 +20,7 @@ def _strip_cams(vision: dict | None) -> dict | None:
     """Base64 CAM görüntülerini yanıttan çıkarır (payload ~1.8MB → KB'lar)."""
     if not vision:
         return vision
-    out = dict(vision)
+    out = {**vision, "base_image_b64": None}
     out["findings"] = [
         {**f, "cam_image_b64": None} if isinstance(f, dict) else f
         for f in out.get("findings", [])
@@ -85,19 +85,52 @@ def get_analysis(analysis_id: str,
 
 @router.get("/{analysis_id}/cam")
 def get_cam(analysis_id: str,
+            finding: str | None = None,
+            clean: bool = False,
             user: User = Depends(get_current_user),
             db: Session = Depends(get_db)) -> dict:
-    """CAM overlay'i ayrı ve tek istekle döner (lazy-load)."""
+    """CAM overlay'i ayrı ve tek istekle döner (lazy-load).
+
+    ?finding=<label>  → o bulgunun kendi ısı haritası (yoksa ilk mevcut)
+    ?clean=true       → bindirmesiz temel görüntü
+    """
     analysis = db.get(Analysis, analysis_id)
     if not analysis or not analysis.vision_result:
         raise HTTPException(404, "Görüntü analizi bulunamadı")
-    for f in analysis.vision_result.get("findings", []):
-        if isinstance(f, dict) and f.get("cam_image_b64"):
+    vision = analysis.vision_result
+
+    if clean:
+        base_b64 = vision.get("base_image_b64")
+        if not base_b64:
+            raise HTTPException(404, "Temiz görüntü kayıtlı değil")
+        return {
+            "label": None,
+            "cam_image_b64": base_b64,
+            "xai_method": vision.get("xai_method"),
+            "empty": False,
+        }
+
+    fallback: dict | None = None
+    for f in vision.get("findings", []):
+        if not isinstance(f, dict) or not f.get("cam_image_b64"):
+            continue
+        if finding is None or f.get("label") == finding:
             return {
                 "label": f.get("label"),
                 "cam_image_b64": f["cam_image_b64"],
-                "xai_method": analysis.vision_result.get("xai_method"),
+                "xai_method": vision.get("xai_method"),
+                "empty": bool(f.get("cam_empty", False)),
             }
+        if fallback is None:
+            fallback = f
+    if finding is not None and fallback is not None:
+        return {
+            "label": fallback.get("label"),
+            "cam_image_b64": fallback["cam_image_b64"],
+            "xai_method": vision.get("xai_method"),
+            "requested_label": finding,
+            "empty": bool(fallback.get("cam_empty", False)),
+        }
     raise HTTPException(404, "Bu analiz için CAM üretilmemiş")
 
 

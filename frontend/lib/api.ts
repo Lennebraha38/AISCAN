@@ -109,10 +109,22 @@ export const api = {
       ecg_result: EcgResult | null;
       decisions: { decision: string; note: string | null; decided_at: string }[];
     }>(`/v1/analyses/${id}`),
-  getCam: (id: string) =>
-    request<{ label: string | null; cam_image_b64: string; xai_method?: string }>(
-      `/v1/analyses/${id}/cam`,
-    ),
+  getCam: (
+    id: string,
+    opts?: { finding?: string; clean?: boolean },
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.finding) q.set("finding", opts.finding);
+    if (opts?.clean) q.set("clean", "1");
+    const qs = q.toString();
+    return request<{
+      label: string | null;
+      requested_label?: string;
+      cam_image_b64: string;
+      xai_method?: string;
+      empty?: boolean;
+    }>(`/v1/analyses/${id}/cam${qs ? `?${qs}` : ""}`);
+  },
   getEcgSignal: (id: string) =>
     request<EcgSignal>(`/v1/analyses/${id}/signal`),
   decide: (id: string, decision: "APPROVED" | "REJECTED", note?: string) =>

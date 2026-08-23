@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import {
@@ -27,8 +27,11 @@ export default function ViewerPage() {
   const [status, setStatus] = useState<string>("");
   const [riskScore, setRiskScore] = useState<number>(0);
   const [selectedFinding, setSelectedFinding] = useState<string | null>(null);
-  const [sharedCam, setSharedCam] = useState<string | null>(null);
-  const [showRegions, setShowRegions] = useState(true);
+  const [heatSrc, setHeatSrc] = useState<string | null>(null);
+  const [cleanSrc, setCleanSrc] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"heat" | "clean">("heat");
+  const [heatEmpty, setHeatEmpty] = useState(false);
+  const camCache = useRef<Map<string, { src: string; empty: boolean }>>(new Map());
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,10 +43,8 @@ export default function ViewerPage() {
       setRiskScore(a.fusion_risk_score);
       if (a.vision_result) {
         setVision(a.vision_result);
-        // CAM artik ana yanitta tasinmiyor; ayri hafif istekle cekilir.
-        if (!a.ecg_result) {
-          api.getCam(id).then((c) => setSharedCam(c.cam_image_b64)).catch(() => {});
-        }
+        // Isi haritalari ana yanitta tasinmiyor; aktif bulgu icin asagidaki
+        // useEffect bulgu-bazli /cam istegiyle ceker.
       }
       if (a.nlp_result) setNlp(a.nlp_result);
       if (a.ecg_result) {
@@ -103,11 +104,61 @@ export default function ViewerPage() {
     findings.find((f) => f.label === selectedFinding) ??
     findings.find((f) => f.probability > 0.5) ??
     findings[0];
-  const camSrc = active?.cam_image_b64
-    ? `data:image/png;base64,${active.cam_image_b64}`
-    : sharedCam
-      ? `data:image/png;base64,${sharedCam}`
-      : null;
+  const activeLabel = active?.label ?? null;
+
+  // Aktif bulgunun KENDI isi haritasini cek (bulgu basina ayri, cache'li).
+  useEffect(() => {
+    if (!analysisId || !activeLabel || viewMode !== "heat") return;
+    const key = `${analysisId}:${activeLabel}`;
+    const cached = camCache.current.get(key);
+    if (cached) {
+      setHeatSrc(cached.src);
+      setHeatEmpty(cached.empty);
+      return;
+    }
+    let alive = true;
+    api
+      .getCam(analysisId, { finding: activeLabel })
+      .then((c) => {
+        const entry = {
+          src: `data:image/png;base64,${c.cam_image_b64}`,
+          empty: !!c.empty,
+        };
+        camCache.current.set(key, entry);
+        if (alive) {
+          setHeatSrc(entry.src);
+          setHeatEmpty(entry.empty);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [analysisId, activeLabel, viewMode]);
+
+  function showClean() {
+    setViewMode("clean");
+    if (!analysisId) return;
+    const key = `${analysisId}:__base`;
+    const cached = camCache.current.get(key);
+    if (cached) {
+      setCleanSrc(cached.src);
+      return;
+    }
+    api
+      .getCam(analysisId, { clean: true })
+      .then((c) => {
+        const entry = { src: `data:image/png;base64,${c.cam_image_b64}`, empty: false };
+        camCache.current.set(key, entry);
+        setCleanSrc(entry.src);
+      })
+      .catch(() => {});
+  }
+
+  const camSrc =
+    viewMode === "clean"
+      ? cleanSrc
+      : heatSrc;
 
   const urgencyColor =
     nlp?.urgency === "yüksek" ? "#c0392b" : nlp?.urgency === "orta" ? "#b7791f" : "#1e8e4e";
@@ -171,7 +222,23 @@ export default function ViewerPage() {
         {/* ---- Görüntü + CAM overlay (radyoloji calismalari) ---- */}
         {!ecg && (
         <div className="card" style={{ flex: 2, minWidth: 380 }}>
-          <h3>Görüntü + Grad-CAM Isı Haritası</h3>
+          <h3>Görüntü + Isı Haritası</h3>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <button
+              className={viewMode === "heat" ? "btn" : "btn secondary"}
+              style={{ padding: "5px 12px", fontSize: 13 }}
+              onClick={() => setViewMode("heat")}
+            >
+              🌡 Isı Haritası
+            </button>
+            <button
+              className={viewMode === "clean" ? "btn" : "btn secondary"}
+              style={{ padding: "5px 12px", fontSize: 13 }}
+              onClick={showClean}
+            >
+              🖼 Temiz Görüntü
+            </button>
+          </div>
           {!camSrc && (
             <div
               style={{
@@ -190,43 +257,11 @@ export default function ViewerPage() {
           {camSrc && (
             <div style={{ position: "relative", borderRadius: 8, overflow: "hidden" }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={camSrc} alt="Grad-CAM bindirilmiş görüntü" style={{ width: "100%", display: "block" }} />
-              {active && showRegions && !!active.top_regions?.length && (
-                <svg
-                  viewBox="0 0 3 3"
-                  preserveAspectRatio="none"
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
-                >
-                  {[...active.top_regions]
-                    .sort((a, b) => b.energy - a.energy)
-                    .slice(0, 3)
-                    .map((r, i) => (
-                      <g key={`${r.row}-${r.col}`}>
-                        <rect
-                          x={r.col + 0.04}
-                          y={r.row + 0.04}
-                          width={0.92}
-                          height={0.92}
-                          rx={0.08}
-                          fill={`rgba(255,209,102,${Math.max(0.08, r.energy * 2)})`}
-                          stroke={i === 0 ? "#ffd166" : "rgba(255,209,102,.55)"}
-                          strokeWidth={i === 0 ? 0.05 : 0.03}
-                        />
-                        <text
-                          x={r.col + 0.14}
-                          y={r.row + 0.34}
-                          fontSize={0.3}
-                          fontWeight="700"
-                          fill="#fff"
-                          stroke="#101a33"
-                          strokeWidth={0.02}
-                        >
-                          {i + 1}
-                        </text>
-                      </g>
-                    ))}
-                </svg>
-              )}
+              <img
+                src={camSrc}
+                alt={viewMode === "clean" ? "Temiz görüntü" : "Bulgu ısı haritası"}
+                style={{ width: "100%", display: "block" }}
+              />
               <div
                 style={{
                   position: "absolute",
@@ -239,23 +274,28 @@ export default function ViewerPage() {
                   fontSize: 12,
                 }}
               >
-                XAI yöntemi: {vision?.xai_method} · overlay %40 opaklık
-                {active && showRegions && !!active.top_regions?.length && (
-                  <span style={{ color: "#ffd166" }}>
-                    {" "}
-                    · «{active.label}» bölgeleri
-                  </span>
+                {viewMode === "clean" ? (
+                  <>Temiz görüntü · bindirme yok</>
+                ) : (
+                  <>
+                    XAI yöntemi: {vision?.xai_method}
+                    {active ? (
+                      <>
+                        {" "}
+                        · «{active.label}» ısı haritası{" "}
+                        <span style={{ color: "#ffd166" }}>
+                          ({(active.probability * 100).toFixed(0)}%)
+                        </span>
+                      </>
+                    ) : null}
+                    {heatEmpty ? " · belirgin yerel kanıt yok" : null}
+                  </>
                 )}
               </div>
             </div>
           )}
 
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <h4 style={{ marginBottom: 6 }}>Bulgu Listesi</h4>
-            <button className="btn secondary" style={{ padding: "4px 10px", fontSize: 12 }} onClick={() => setShowRegions((v) => !v)}>
-              {showRegions ? "Bölgeleri Gizle" : "Bölgeleri Göster"}
-            </button>
-          </div>
+          <h4 style={{ marginBottom: 6 }}>Bulgu Listesi</h4>
           <table className="list">
             <thead>
               <tr>

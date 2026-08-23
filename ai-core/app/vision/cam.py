@@ -101,3 +101,58 @@ def produce_cam_overlay(image_bytes: bytes, model=None, target_layers=None) -> t
     heat = energy_saliency(gray)
     png = overlay_heatmap(gray, heat)
     return base64.b64encode(png).decode(), heat
+
+
+def _ct_adjusted_gray(image_bytes: bytes, modality: str) -> np.ndarray:
+    from .engine import load_grayscale, hu_window
+
+    gray = load_grayscale(image_bytes)
+    if modality and modality.upper().startswith("CT") and image_bytes[:2] in (b"\xff\xd8", b"\x89P"):
+        gray = hu_window(gray * 255.0 - 1000.0)
+    return gray
+
+
+def render_finding_overlay(image_bytes: bytes, label: str, modality: str = "CR",
+                           probability: float = 0.0) -> tuple[str, bool]:
+    """Bulgunun KENDI mekânsal imzasından yumuşak ısı haritası.
+
+    Dönüş: (base64_png, bos_mu). Kare kutu/numara yerine Gauss yumuşatmalı,
+    olasılıkla şiddetlenen jet-colormap bindirme; bulgunun özelliği
+    görüntüde sinyal üretmiyorsa harita boştur (dürüst davranış).
+    """
+    from PIL import ImageFilter
+
+    from .engine import finding_saliency_map
+
+    gray = _ct_adjusted_gray(image_bytes, modality)
+    sal = finding_saliency_map(gray, label)
+    smooth = Image.fromarray((sal * 255).astype(np.uint8)).filter(
+        ImageFilter.GaussianBlur(radius=16)
+    )
+    sal = np.asarray(smooth, dtype=np.float32) / 255.0
+    # Blur seyrek sinyali sulandirir: tepe noktasini geri getir ki
+    # gercek bulgular esikte kaybolmasin.
+    peak = float(sal.max())
+    if peak > 1e-6:
+        sal = sal / peak
+    sal[sal < 0.18] = 0.0
+    empty = bool(sal.max() <= 1e-6)
+
+    colored = _jet_colormap(sal).astype(np.float32)
+    base = np.repeat((gray * 255.0)[..., None], 3, axis=2)
+    strength = 0.30 + 0.50 * min(max(probability, 0.0), 1.0)
+    alpha = (sal * strength)[..., None]
+    out = np.clip(base * (1.0 - alpha) + colored * alpha, 0, 255).astype(np.uint8)
+
+    buf = io.BytesIO()
+    Image.fromarray(out).save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode(), empty
+
+
+def render_base_image(image_bytes: bytes, modality: str = "CR") -> str:
+    """Bindirmesiz, temel gri görüntü (base64 PNG) — 'temiz görüntü' için."""
+    gray = _ct_adjusted_gray(image_bytes, modality)
+    arr = (np.clip(gray, 0, 1) * 255).astype(np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(arr).save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode()
