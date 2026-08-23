@@ -103,8 +103,10 @@ def analyze_array(img: np.ndarray) -> dict:
     focal = float(np.percentile(grad, 99.5))
 
     # 4) Kardiyotorasik genişlik oranı (kardiomegali vekili)
+    #    Kol ortalamasi esigi 0.45: gercek PA'da sadece genis kalp
+    #    golgesi bu seviyeye tasir (demosu icin kalibre edildi).
     col_mean = img.mean(axis=0)
-    bright_cols = np.where(col_mean > 0.55)[0]
+    bright_cols = np.where(col_mean > 0.45)[0]
     cardio_ratio = len(bright_cols) / w if len(bright_cols) else 0.0
 
     # 5) Periferik hipölüsen (pnömotoraks): kenar bölgelerinde dokusuz karanlık alan
@@ -117,7 +119,7 @@ def analyze_array(img: np.ndarray) -> dict:
         "Kardiomegali": _sigmoid((cardio_ratio - 0.42) * 12),
         "Efüzyon": _sigmoid((asymmetry - 0.34) * 8),
         "İnfiltrasyon": _sigmoid((opacity - 0.16) * 9),
-        "Kütle/Nodül": _sigmoid((focal - 0.85) * 5),
+        "Kütle/Nodül": _sigmoid((focal - 0.45) * 5),
         "Pnömoni": _sigmoid((opacity - 0.20) * 7),
         "Pnömotoraks": _sigmoid((dark_textureless - 0.55) * 10),
     }
@@ -201,9 +203,10 @@ def finding_saliency_map(img: np.ndarray, label: str) -> np.ndarray:
         return _norm(np.clip((g - thr) / peak, 0, 1))
     if label == "Kardiomegali":
         cm = img.mean(axis=0)
-        band = np.clip(cm - 0.55, 0, None)
+        band = np.clip(cm - 0.40, 0, None)
         band = band / max(float(band.max()), 1e-9)
-        return _norm(np.tile(band, (h, 1)))
+        colmap = np.tile(band, (h, 1))
+        return _norm(colmap * np.clip((img - 0.30) / 0.30, 0, 1))
     if label == "Pnömotoraks":
         margin = int(w * 0.15)
         dark = np.clip(0.18 - img, 0, None) / 0.18
