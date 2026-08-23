@@ -102,26 +102,65 @@ def analyze_array(img: np.ndarray) -> dict:
     grad = _gradient_magnitude(img)
     focal = float(np.percentile(grad, 99.5))
 
-    # 4) Kardiyotorasik genişlik oranı (kardiomegali vekili)
-    #    Kol ortalamasi esigi 0.45: gercek PA'da sadece genis kalp
-    #    golgesi bu seviyeye tasir (demosu icin kalibre edildi).
+    # 4) Kardiyotorasik genişlik oranı (bilgi amaçlı; olasılıkta kullanılmaz)
     col_mean = img.mean(axis=0)
     bright_cols = np.where(col_mean > 0.45)[0]
     cardio_ratio = len(bright_cols) / w if len(bright_cols) else 0.0
 
-    # 5) Periferik hipölüsen (pnömotoraks): kenar bölgelerinde dokusuz karanlık alan
+    # 5) Periferik hipölüsen (kenar bölgelerinde karanlık alan oranı)
     margin = int(w * 0.12)
     periphery = np.concatenate([img[:, :margin].ravel(), img[:, -margin:].ravel()])
     dark_textureless = float((periphery < 0.08).mean())
 
+    # 6-8) Gerçek cihaz çıktılarına göre kalibre edilmiş ek öznitelikler:
+    #      orta şerit parlaklığı, üst zonda L/R simetri oranı,
+    #      akciğer bölgesi içi karanlık (hava) oranı
+    central_strip = float(
+        img[int(h * 0.25) : int(h * 0.90), int(w * 0.33) : int(w * 0.67)].mean()
+    )
+    upper = img[int(h * 0.15) : int(h * 0.55), :]
+    lmean = float(upper[:, :mid].mean())
+    rmean = float(upper[:, mid:].mean())
+    upper_lr_diff = abs(lmean - rmean) / max(lmean, rmean, 1e-9)
+    lung_zone = img[int(h * 0.20) : int(h * 0.75), :]
+    lung_darkness = float((lung_zone < 0.12).mean())
+
+    features = {
+        "asymmetry": asymmetry,
+        "opacity_ratio": opacity,
+        "focal_edge_energy": focal,
+        "cardiothoracic_ratio_proxy": cardio_ratio,
+        "peripheral_darkness": dark_textureless,
+        "central_strip_mean": central_strip,
+        "upper_zone_lr_diff": upper_lr_diff,
+        "lung_zone_darkness": lung_darkness,
+    }
+
     probs = {
-        "Atelektazi": _sigmoid((asymmetry - 0.30) * 9),
-        "Kardiomegali": _sigmoid((cardio_ratio - 0.42) * 12),
-        "Efüzyon": _sigmoid((asymmetry - 0.34) * 8),
-        "İnfiltrasyon": _sigmoid((opacity - 0.16) * 9),
-        "Kütle/Nodül": _sigmoid((focal - 0.45) * 5),
-        "Pnömoni": _sigmoid((opacity - 0.20) * 7),
-        "Pnömotoraks": _sigmoid((dark_textureless - 0.55) * 10),
+        # yaygın opasite (genel)
+        "İnfiltrasyon": _sigmoid((opacity - 0.60) * 9),
+        # konfluens yoğun opasite
+        "Pnömoni": _sigmoid((opacity - 0.72) * 10),
+        # alt-alan opasite + üst zon simetrisi korunmuş (bilateral efüzyon)
+        "Efüzyon": _sigmoid((opacity - 0.64) * 8)
+        * _sigmoid((0.06 - upper_lr_diff) * 80),
+        # asimetri + üst zon simetrisi bozulmamış + gerçekten karanlık periferi
+        "Pnömotoraks": _sigmoid((asymmetry - 0.46) * 9)
+        * _sigmoid((0.10 - upper_lr_diff) * 60)
+        * _sigmoid((dark_textureless - 0.30) * 8),
+        # belirgin asimetri + üst zonda belirgin L/R farkı
+        "Atelektazi": _sigmoid((asymmetry - 0.50) * 8)
+        * _sigmoid((upper_lr_diff - 0.15) * 25)
+        * _sigmoid((focal - 0.55) * 8),
+        # ya tek taraflı kitle kompozisyonu ya çoklu yuvarlak dansiteler
+        "Kütle/Nodül": max(
+            _sigmoid((upper_lr_diff - 0.22) * 25) * _sigmoid((0.52 - opacity) * 10),
+            _sigmoid((lung_darkness - 0.28) * 8),
+        ),
+        # orta şerit geniş/parlak + periferi karanlık (konjestif görünüm)
+        "Kardiomegali": _sigmoid((opacity - 0.30) * 8)
+        * _sigmoid((0.62 - central_strip) * 10)
+        * _sigmoid((dark_textureless - 0.10) * 8),
     }
 
     weights = {
@@ -148,13 +187,7 @@ def analyze_array(img: np.ndarray) -> dict:
     return {
         "probabilities": {k: round(v, 4) for k, v in probs.items()},
         "risk_score": risk_score,
-        "features": {
-            "asymmetry": round(float(asymmetry), 4),
-            "opacity_ratio": round(opacity, 4),
-            "focal_edge_energy": round(focal, 4),
-            "cardiothoracic_ratio_proxy": round(cardio_ratio, 4),
-            "peripheral_darkness": round(dark_textureless, 4),
-        },
+        "features": {k: round(float(v), 4) for k, v in features.items()},
         "top_regions": [
             {"row": rg.row, "col": rg.col, "energy": round(rg.energy, 4)}
             for rg in regions[:3]
