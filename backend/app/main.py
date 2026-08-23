@@ -34,6 +34,18 @@ engine = make_engine(settings.database_url)
 
 @app.on_event("startup")
 def startup() -> None:
+    import logging
+
+    if settings.jwt_secret == "dev-secret-change-me":
+        # Prod ortamda JWT_SECRET env ile ZORUNLU verilmeli; aksi halde
+        # token'lar tahmin edilebilir olur. Demo'da bilinçli varsayılan.
+        logging.getLogger("uvicorn.error").warning(
+            "JWT_SECRET ayarlanmamis! Uretimde kesinlikle ozel bir anahtar tanimlayin."
+        )
+    if settings.database_url.startswith("sqlite"):
+        logging.getLogger("uvicorn.error").warning(
+            "SQLite kullaniliyor: coklu instance / yuksek yazma yuku icin PostgreSQL onerilir."
+        )
     init_db(engine)
     from sqlalchemy.orm import sessionmaker
 

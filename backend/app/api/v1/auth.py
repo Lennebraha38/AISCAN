@@ -13,7 +13,14 @@ from ...core.security import (
     verify_password,
 )
 from ...models import User
-from ...schemas import LoginRequest, RefreshRequest, TokenResponse, UserOut
+from ...schemas import (
+    LoginRequest,
+    PasswordChangeRequest,
+    RefreshRequest,
+    TokenResponse,
+    UserCreateRequest,
+    UserOut,
+)
 from ...services.audit import write_audit
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -57,18 +64,38 @@ def me(user: User = Depends(get_current_user)) -> UserOut:
 
 
 @router.post("/users", response_model=UserOut, status_code=201)
-def create_user(email: str, password: str, role: str,
+def create_user(payload: UserCreateRequest,
                 admin: User = Depends(get_current_user),
                 db: Session = Depends(get_db)) -> UserOut:
+    """Yeni kullanıcı açma. Şifre yalnız istek gövdesinde taşınır (URL/log'a düşmez)."""
     if admin.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Yalnız admin kullanıcı açabilir")
+    role = payload.role.lower().strip()
     if role not in ("admin", "hekim", "radyolog", "asistan"):
         raise HTTPException(422, "Geçersiz rol")
-    if db.query(User).filter(User.email == email.lower()).first():
+    email = payload.email.lower().strip()
+    if db.query(User).filter(User.email == email).first():
         raise HTTPException(409, "Bu e-posta kayıtlı")
-    if len(password) < 8:
+    if len(payload.password) < 8:
         raise HTTPException(422, "Şifre en az 8 karakter olmalı")
-    user = User(email=email.lower(), password_hash=hash_password(password), role=role)
+    user = User(email=email, password_hash=hash_password(payload.password), role=role)
     db.add(user)
     db.flush()
+    write_audit(db, user_id=admin.id, action="USER_CREATED", entity_type="user",
+                entity_id=user.id)
     return UserOut(id=user.id, email=user.email, role=user.role, created_at=user.created_at)
+
+
+@router.post("/password", status_code=200)
+def change_password(payload: PasswordChangeRequest,
+                    user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)) -> dict:
+    """Kullanıcının kendi şifresini değiştirmesi (eski şifre doğrulanır)."""
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Mevcut şifre hatalı")
+    if len(payload.new_password) < 8:
+        raise HTTPException(422, "Yeni şifre en az 8 karakter olmalı")
+    user.password_hash = hash_password(payload.new_password)
+    write_audit(db, user_id=user.id, action="PASSWORD_CHANGED", entity_type="user",
+                entity_id=user.id)
+    return {"status": "ok"}

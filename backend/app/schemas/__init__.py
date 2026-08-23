@@ -22,6 +22,18 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class UserCreateRequest(BaseModel):
+    """Kullanıcı açma gövdesi — şifre URL'de değil yalnız gövdede taşınır."""
+    email: str
+    password: str
+    role: str
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class UserOut(BaseModel):
     id: str
     email: str
