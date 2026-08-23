@@ -68,5 +68,22 @@ Token: access 30 dk + refresh (gün); `POST /v1/auth/refresh`.
 ## 5. Denetim Kaydı
 
 `audit_logs` tablosuna yazılan olaylar: LOGIN, LOGIN_FAILED, USER_CREATED,
-PASSWORD_CHANGED, STUDY_CREATED, ANALYSIS_CREATED, DECISION_APPROVED,
-DECISION_REJECTED. Her kayıt user_id + IP + UTC zaman damgası taşır.
+PASSWORD_CHANGED, STUDY_CREATED, ANALYSIS_CREATED, REPORT_DOWNLOADED,
+DECISION_APPROVED, DECISION_REJECTED. Her kayıt user_id + IP + UTC zaman
+damgası taşır. Adminler `Denetim Kaydı` sayfasından canlı izleyebilir.
+
+## 6. Resmi Rapor Çıktısı
+
+Kesinleşen (APPROVED/REJECTED) analizlerde viewer üzerinden
+`GET /v1/analyses/{id}/report.pdf` ile resmi PDF üretilir:
+
+- Doğrulama kodu = sha256(analysis_id | decided_at)[:16] — kopya ayırt etme
+- Bulgular, fuzyon risk bandı, NLP aciliyeti ve hekim kararı/notu
+- "Karar destek aracıdır; nihai sorumluluk hekimdedir" ibaresi (MDR)
+- İndirme olayı audit log'a REPORT_DOWNLOADED olarak yazılır
+
+## 7. Gerçek Cihaz Formatı: DICOM (.dcm)
+
+Yükleme akışı .dcm kabul eder; ai-core pydicom ile piksel verisini okur
+(CR/CT modality). Viewer temiz görüntü ve bulgu haritaları DICOM kaynağıyla
+da aynı şekilde çalışır.

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api, clearTokens } from "../../lib/api";
+import { api, clearTokens, getTokens } from "../../lib/api";
 
 interface AnalysisRow {
   id: string;
@@ -34,6 +34,9 @@ export default function DashboardPage() {
         <Link href="/dashboard">Panel</Link>
         <Link href="/studies/new">Yeni Çalışma</Link>
         <Link href="/approvals">Onay Bekleyenler ({pending})</Link>
+        {getTokens()?.role === "admin" && (
+          <Link href="/admin/audit">Denetim Kaydı</Link>
+        )}
         <span style={{ flex: 1 }} />
         <a
           href="#"

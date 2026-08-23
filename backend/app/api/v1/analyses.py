@@ -4,14 +4,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from ...core.deps import DECISION_ROLES, client_ip, get_current_user, get_db
-from ...models import Analysis, ReviewDecision, User
+from ...models import Analysis, ReviewDecision, Study, User
 from ...schemas import AnalysisOut, DecisionOut, DecisionRequest
 from ...services.audit import write_audit
 from ...services.embeddings import similar_cases
+from ...services.report_pdf import render_report
 
 router = APIRouter(prefix="/v1/analyses", tags=["analyses"])
 
@@ -81,6 +82,45 @@ def get_analysis(analysis_id: str,
         for d in analysis.decisions
     ]
     return out
+
+
+@router.get("/{analysis_id}/report.pdf")
+def report_pdf(analysis_id: str,
+               user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)) -> Response:
+    """Kesinleşmiş analizin resmi PDF raporu (hekim/radyolog/admin).
+
+    Rapor; doğrulama kodu, bulgular, fuzyon riski ve hekim kararını içerir.
+    """
+    if user.role not in DECISION_ROLES:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Rapor indirme yetkisi hekim/radyolog/admin'e aittir")
+    analysis = db.get(Analysis, analysis_id)
+    if not analysis:
+        raise HTTPException(404, "Analiz bulunamadı")
+    if analysis.status not in ("APPROVED", "REJECTED"):
+        raise HTTPException(409, "Analiz henüz kesinleşmedi (hekim kararı bekleniyor)")
+    study = db.get(Study, analysis.study_id)
+    out = _analysis_out(analysis).model_dump()
+    out["decisions"] = [
+        {
+            "decision": d.decision,
+            "note": d.note,
+            "decided_at": d.decided_at,
+            "reviewer_id": d.reviewer_id,
+        }
+        for d in analysis.decisions
+    ]
+    pdf = render_report(out, {
+        "anon_study_hash": study.anon_study_hash if study else "-",
+        "modality": study.modality if study else "-",
+        "created_at": study.created_at if study else None,
+    })
+    write_audit(db, user_id=user.id, action="REPORT_DOWNLOADED",
+                entity_type="analysis", entity_id=analysis.id)
+    fname = f"pulsar-rapor-{analysis.id[:8]}.pdf"
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @router.get("/{analysis_id}/cam")

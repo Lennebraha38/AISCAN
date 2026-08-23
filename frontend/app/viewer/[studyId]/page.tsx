@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import {
   api,
+  getTokens,
+  API_URL,
   type NlpResult,
   type VisionFinding,
   type VisionResult,
@@ -105,6 +107,32 @@ export default function ViewerPage() {
       setError(e instanceof Error ? e.message : "Karar kaydedilemedi");
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Kesinleşen analizin resmi PDF raporunu indirir (hekim/radyolog/admin).
+  async function downloadReport() {
+    if (!analysisId) return;
+    const tokens = getTokens();
+    if (!tokens) return;
+    setError("");
+    try {
+      const resp = await fetch(
+        `${API_URL}/v1/analyses/${analysisId}/report.pdf`,
+        { headers: { Authorization: `Bearer ${tokens.access_token}` } }
+      );
+      if (!resp.ok) throw new Error(`Rapor alınamadı (HTTP ${resp.status})`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `pulsar-rapor-${analysisId.slice(0, 8)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Rapor indirilemedi");
     }
   }
 
@@ -283,6 +311,12 @@ export default function ViewerPage() {
               </p>
             )}
           </div>
+
+          {(status === "APPROVED" || status === "REJECTED") && (
+            <button className="btn" style={{ marginTop: 12 }} onClick={downloadReport} disabled={busy}>
+              📄 Resmi Rapor PDF İndir
+            </button>
+          )}
 
           <button className="btn secondary" onClick={runAnalysis} disabled={busy}>
             Yenile
