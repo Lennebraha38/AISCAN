@@ -10,6 +10,12 @@ interface AnalysisRow {
   status: string;
   fusion_risk_score: number;
   created_at: string;
+  modality?: string | null;
+  top_finding?: string | null;
+}
+
+function riskColor(v: number): string | undefined {
+  return v >= 65 ? "#c0392b" : v >= 35 ? "#b7791f" : undefined;
 }
 
 export default function DashboardPage() {
@@ -76,6 +82,7 @@ export default function DashboardPage() {
             <thead>
               <tr>
                 <th>Tarih</th>
+                <th>Vaka</th>
                 <th>Risk Skoru</th>
                 <th>Durum</th>
                 <th></th>
@@ -85,7 +92,14 @@ export default function DashboardPage() {
               {analyses.map((a) => (
                 <tr key={a.id}>
                   <td>{new Date(a.created_at).toLocaleString("tr-TR")}</td>
-                  <td>{a.fusion_risk_score.toFixed(1)}</td>
+                  <td>
+                    {a.top_finding
+                      ? <strong>{a.top_finding}</strong>
+                      : <small style={{ color: "#8a93ab" }}>{a.modality ?? "—"} · bulgu yok</small>}
+                  </td>
+                  <td style={{ color: riskColor(a.fusion_risk_score), fontWeight: 600 }}>
+                    {a.fusion_risk_score.toFixed(1)}
+                  </td>
                   <td>
                     <span className={`badge ${a.status.toLowerCase()}`}>
                       {a.status === "PENDING_REVIEW"
@@ -102,7 +116,7 @@ export default function DashboardPage() {
               ))}
               {!analyses.length && (
                 <tr>
-                  <td colSpan={4} style={{ color: "#8a93ab" }}>
+                  <td colSpan={5} style={{ color: "#8a93ab" }}>
                     Henüz analiz yok.{" "}
                     <Link href="/studies/new">İlk çalışmayı oluştur</Link>.
                   </td>

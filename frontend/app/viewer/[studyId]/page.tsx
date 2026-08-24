@@ -236,29 +236,44 @@ export default function ViewerPage() {
               </tr>
             </thead>
             <tbody>
-              {findings.map((f) => (
-                <tr key={f.label}>
-                  <td>{f.label}</td>
-                  <td>
-                    <div style={{ background: "#edf0f6", borderRadius: 6, width: 140, height: 10 }}>
-                      <div
-                        style={{
-                          width: `${Math.round(f.probability * 100)}%`,
-                          height: 10,
-                          borderRadius: 6,
-                          background: f.probability > 0.5 ? "#c0392b" : "#2456d6",
-                        }}
-                      />
-                    </div>{" "}
-                    <small>{(f.probability * 100).toFixed(1)}%</small>
-                  </td>
-                </tr>
-              ))}
-              {!findings.length && (
-                <tr>
-                  <td colSpan={2} style={{ color: "#8a93ab" }}>Bulgu yok</td>
-                </tr>
-              )}
+              {(() => {
+                const sorted = [...findings].sort((a, b) => b.probability - a.probability);
+                const meaningful = sorted.filter((f) => f.probability >= 0.05);
+                if (!sorted.length) {
+                  return (
+                    <tr>
+                      <td colSpan={2} style={{ color: "#8a93ab" }}>Bulgu yok</td>
+                    </tr>
+                  );
+                }
+                if (!meaningful.length) {
+                  return (
+                    <tr>
+                      <td colSpan={2} style={{ color: "#8a93ab" }}>
+                        Belirgin bulgu saptanmadı (tüm sınıfların olasılığı %5'in altında).
+                      </td>
+                    </tr>
+                  );
+                }
+                return meaningful.map((f) => (
+                  <tr key={f.label}>
+                    <td>{f.label}</td>
+                    <td>
+                      <div style={{ background: "#edf0f6", borderRadius: 6, width: 140, height: 10 }}>
+                        <div
+                          style={{
+                            width: `${Math.round(f.probability * 100)}%`,
+                            height: 10,
+                            borderRadius: 6,
+                            background: f.probability > 0.5 ? "#c0392b" : "#2456d6",
+                          }}
+                        />
+                      </div>{" "}
+                      <small>{(f.probability * 100).toFixed(1)}%</small>
+                    </td>
+                  </tr>
+                ));
+              })()}
             </tbody>
           </table>
         </div>

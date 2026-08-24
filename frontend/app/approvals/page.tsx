@@ -7,7 +7,8 @@ import { api } from "../../lib/api";
 /** Hekim onay kuyruğu — MDR human-in-the-loop merkezi ekran. */
 export default function ApprovalsPage() {
   const [rows, setRows] = useState<
-    { id: string; study_id: string; status: string; fusion_risk_score: number; created_at: string }[]
+    { id: string; study_id: string; status: string; fusion_risk_score: number;
+      created_at: string; modality?: string | null; top_finding?: string | null }[]
   >([]);
   const [error, setError] = useState("");
 
@@ -28,20 +29,30 @@ export default function ApprovalsPage() {
       <div className="card">
         <table className="list">
           <thead>
-            <tr>
-              <th>Tarih</th>
-              <th>Risk Skoru</th>
-              <th>Durum</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((a) => (
-              <tr key={a.id}>
-                <td>{new Date(a.created_at).toLocaleString("tr-TR")}</td>
-                <td style={{ color: a.fusion_risk_score >= 65 ? "#c0392b" : undefined }}>
-                  {a.fusion_risk_score.toFixed(1)}
-                </td>
+              <tr>
+                <th>Tarih</th>
+                <th>Vaka</th>
+                <th>Risk Skoru</th>
+                <th>Durum</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((a) => (
+                <tr key={a.id}>
+                  <td>{new Date(a.created_at).toLocaleString("tr-TR")}</td>
+                  <td>
+                    {a.top_finding
+                      ? <strong>{a.top_finding}</strong>
+                      : <small style={{ color: "#8a93ab" }}>{a.modality ?? "—"}</small>}
+                  </td>
+                  <td style={{
+                    color: a.fusion_risk_score >= 65 ? "#c0392b"
+                      : a.fusion_risk_score >= 35 ? "#b7791f" : undefined,
+                    fontWeight: 600,
+                  }}>
+                    {a.fusion_risk_score.toFixed(1)}
+                  </td>
                 <td>
                   <span className="badge pending">⏳ Hekim onayı bekliyor</span>
                 </td>
@@ -52,7 +63,7 @@ export default function ApprovalsPage() {
             ))}
             {!rows.length && (
               <tr>
-                <td colSpan={4} style={{ color: "#8a93ab" }}>
+                  <td colSpan={5} style={{ color: "#8a93ab" }}>
                   Bekleyen analiz yok.
                 </td>
               </tr>

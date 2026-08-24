@@ -48,20 +48,34 @@ def list_analyses(status_filter: str | None = None,
                   user: User = Depends(get_current_user),
                   db: Session = Depends(get_db)) -> list[dict]:
     """Hafif liste projeksiyonu — ağır analiz kolonları (vision/nlp/ecg)
-    dökülmez; aksi halde her satır MB'larca base64 taşır."""
+    dökülmez; aksi halde her satır MB'larca base64 taşır.
+    Panelde okunabilirlik için modalite ve baskın bulgu etiketi eklenir."""
     q = db.query(Analysis).order_by(Analysis.created_at.desc())
     if status_filter:
         q = q.filter(Analysis.status == status_filter)
-    return [
-        {
+    studies = {s.id: s for s in db.query(Study).all()}
+    rows = []
+    for a in q.limit(100):
+        top = None
+        vr = a.vision_result or {}
+        fnds = [f for f in (vr.get("findings") or []) if isinstance(f, dict)]
+        if fnds:
+            best = max(fnds, key=lambda f: (f.get("probability") or 0))
+            if (best.get("probability") or 0) >= 0.30:
+                top = best.get("label")
+        er = a.ecg_result or {}
+        ecg_label = er.get("superclass") if isinstance(er, dict) else None
+        study = studies.get(a.study_id)
+        rows.append({
             "id": a.id,
             "study_id": a.study_id,
             "status": a.status,
             "fusion_risk_score": a.fusion_risk_score,
             "created_at": a.created_at.isoformat(),
-        }
-        for a in q.limit(100)
-    ]
+            "modality": study.modality if study else None,
+            "top_finding": top or (f"EKG · {ecg_label}" if ecg_label else None),
+        })
+    return rows
 
 
 @router.get("/{analysis_id}")
@@ -135,8 +149,11 @@ def get_cam(analysis_id: str,
     ?clean=true       → bindirmesiz temel görüntü
     """
     analysis = db.get(Analysis, analysis_id)
-    if not analysis or not analysis.vision_result:
-        raise HTTPException(404, "Görüntü analizi bulunamadı")
+    if not analysis:
+        raise HTTPException(404, "Analiz bulunamadı")
+    if not analysis.vision_result:
+        # EKG vb. görüntüsüz analiz: ön yüz boş görselle sessizce geçer.
+        return {"label": None, "cam_image_b64": "", "empty": True}
     vision = analysis.vision_result
 
     if clean:
