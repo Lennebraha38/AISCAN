@@ -134,7 +134,8 @@ export const api = {
     }),
   listAnalyses: (status?: string) =>
     request<
-      { id: string; study_id: string; status: string; fusion_risk_score: number; created_at: string }[]
+      { id: string; study_id: string; status: string; fusion_risk_score: number;
+        created_at: string; modality?: string | null; top_finding?: string | null }[]
     >(`/v1/analyses${status ? `?status_filter=${status}` : ""}`),
 };
 

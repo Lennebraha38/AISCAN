@@ -62,3 +62,6 @@ app.include_router(auth.router)
 app.include_router(studies.router)
 app.include_router(analyses.router)
 app.include_router(audit.router)
+from .api.v1 import verify as verify_router  # noqa: E402
+
+app.include_router(verify_router.router)

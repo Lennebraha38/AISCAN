@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { api, getTokens } from "../../../lib/api";
 
@@ -34,6 +34,7 @@ export default function AuditPage() {
   const [filter, setFilter] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [linkedStudy, setLinkedStudy] = useState<Record<string, string>>({});
+  const [cases, setCases] = useState<Awaited<ReturnType<typeof api.listAnalyses>>>([]);
 
   useEffect(() => {
     const t = getTokens();
@@ -47,7 +48,20 @@ export default function AuditPage() {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(setRows)
       .catch((e) => setError(e instanceof Error ? e.message : "Kayıtlar yüklenemedi"));
+    api.listAnalyses().then(setCases).catch(() => {});
   }, []);
+
+  const stats = useMemo(() => {
+    const n = cases.length || 1;
+    const appr = cases.filter((c) => c.status === "APPROVED").length;
+    const rej = cases.filter((c) => c.status === "REJECTED").length;
+    const pend = cases.filter((c) => c.status === "PENDING_REVIEW").length;
+    const avg = cases.reduce((s, c) => s + c.fusion_risk_score, 0) / n;
+    const counts = new Map<string, number>();
+    for (const c of cases) if (c.top_finding) counts.set(c.top_finding, (counts.get(c.top_finding) ?? 0) + 1);
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    return { total: cases.length, appr, rej, pend, avg, top };
+  }, [cases]);
 
   // Analiz olaylarında ilgili vakanın viewer linkini çöz.
   async function resolveLink(row: AuditRow) {
@@ -86,6 +100,20 @@ export default function AuditPage() {
         (son 200 kayıt). Detay için bir satıra tıklayın.
       </p>
       {error && <p style={{ color: "#c0392b" }}>{error}</p>}
+
+      {!error && stats.total > 0 && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <h3>Karar İstatistikleri</h3>
+          <div style={{ display: "flex", gap: 22, flexWrap: "wrap", fontSize: 14 }}>
+            <span>Toplam analiz: <strong>{stats.total}</strong></span>
+            <span style={{ color: "#1e8e4e" }}>Onaylı: <strong>{stats.appr}</strong> (%{Math.round((stats.appr / stats.total) * 100)})</span>
+            <span style={{ color: "#c0392b" }}>Reddedilen: <strong>{stats.rej}</strong></span>
+            <span>Bekleyen: <strong>{stats.pend}</strong></span>
+            <span>Ortalama risk: <strong>{stats.avg.toFixed(1)}</strong></span>
+            {stats.top && <span>En sık bulgu: <strong>{stats.top[0]}</strong> ({stats.top[1]}×)</span>}
+          </div>
+        </div>
+      )}
 
       {!error && (
         <>

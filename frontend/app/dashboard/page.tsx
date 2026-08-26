@@ -74,6 +74,42 @@ export default function DashboardPage() {
               {highRisk}
             </p>
           </div>
+          {analyses.length > 0 && (
+            <div className="card" style={{ flex: 2, minWidth: 280 }}>
+              <h3>Risk Dağılımı</h3>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 90 }}>
+                {[0, 1, 2, 3, 4].map((b) => {
+                  const n = analyses.filter(
+                    (a) => a.fusion_risk_score >= b * 20 && a.fusion_risk_score < (b + 1) * 20 ||
+                      (b === 4 && a.fusion_risk_score === 100)
+                  ).length;
+                  const colors = ["#2e9e5b", "#7cb342", "#d9a441", "#e07b39", "#c0392b"];
+                  const max = Math.max(1, ...[0, 1, 2, 3, 4].map(
+                    (k) => analyses.filter(
+                      (a) => a.fusion_risk_score >= k * 20 && a.fusion_risk_score < (k + 1) * 20 ||
+                        (k === 4 && a.fusion_risk_score === 100)
+                    ).length
+                  ));
+                  return (
+                    <div key={b} style={{ flex: 1, textAlign: "center" }}>
+                      <div style={{ fontSize: 12, color: "#66708a" }}>{n}</div>
+                      <div
+                        title={`${b * 20}–${(b + 1) * 20}: ${n} vaka`}
+                        style={{
+                          height: `${Math.round((n / max) * 62) + (n ? 6 : 0)}px`,
+                          background: colors[b],
+                          borderRadius: 4,
+                          opacity: n ? 1 : 0.15,
+                          marginTop: 2,
+                        }}
+                      />
+                      <small style={{ color: "#8a93ab" }}>{b * 20}–{(b + 1) * 20}</small>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="card">

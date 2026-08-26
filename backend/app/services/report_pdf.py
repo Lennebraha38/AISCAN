@@ -2,7 +2,7 @@
 
 Rapor; calisma, bulgular, fuzyon riski, NLP aciliyeti ve hekim kararini
 icerir. Dogrulama kodu = sha256(analysis_id | decided_at)[:16] olup
-kopya/karalama ayirt etmede kullanilir.
+PDF'te QR olarak da basilir; GET /v1/verify/{kod} ile saglanabilir.
 """
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
+from reportlab.graphics.barcode.qr import QrCodeWidget
+from reportlab.graphics.shapes import Drawing
 
 _FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 pdfmetrics.registerFont(TTFont("DVS", f"{_FONT_DIR}/DejaVuSans.ttf"))
@@ -157,6 +159,13 @@ def render_report(analysis: dict, study: dict) -> bytes:
     c.setStrokeColorRGB(0.8, 0.82, 0.88)
     c.line(x, y, W - x, y)
     y -= 16
+    # QR: dogrulama kodunu telefonla okutulabilir yapar
+    qrw = QrCodeWidget(f"PULSAR-KKDS:{code}")
+    qb = qrw.getBounds()
+    qsize = 74
+    qd = Drawing(qsize, qsize, transform=[qsize / qb[2], 0, 0, qsize / qb[3], 0, 0])
+    qd.add(qrw)
+    qd.drawOn(c, W - x - qsize, y - qsize + 10)
     c.setFont("DVS", 8.5)
     c.setFillColorRGB(0.42, 0.45, 0.52)
     c.drawString(x, y, "Bu çıktı yapay zeka destekli bir KARAR DESTEK aracıdır; nihai klinik karar ve")
@@ -164,6 +173,9 @@ def render_report(analysis: dict, study: dict) -> bytes:
     c.drawString(x, y, "sorumluluk onaylayan hekime aittir (MDR human-in-the-loop). KVKK gereği veriler anonimdir.")
     y -= 14
     c.setFont("DVS", 9)
+    c.drawString(x, y, "QR'daki kodu GET /v1/verify/{kod} ucundan sorgularak raporun özgünlüğünü doğrulayabilirsiniz.")
+    y -= 14
+    c.setFont("DVSB", 9)
     c.setFillColorRGB(0.13, 0.24, 0.55)
     c.drawString(x, y, f"Doğrulama kodu: {code}")
 
