@@ -13,8 +13,17 @@ from ...schemas import AnalysisOut, DecisionOut, DecisionRequest
 from ...services.audit import write_audit
 from ...services.embeddings import similar_cases
 from ...services.report_pdf import render_report
+from ...services.patient_report import patient_report
 
 router = APIRouter(prefix="/v1/analyses", tags=["analyses"])
+
+# Bildirimleri broadcast et (hata olursa sessizce gec)
+async def _broadcast(event: dict) -> None:
+    try:
+        from .notifications import broadcast
+        await broadcast(event)
+    except Exception:
+        pass
 
 
 def _strip_cams(vision: dict | None) -> dict | None:
@@ -222,6 +231,19 @@ def decide(analysis_id: str,
     db.flush()
     write_audit(db, user_id=user.id, action=f"DECISION_{payload.decision}",
                 entity_type="analysis", entity_id=analysis.id, ip=client_ip(request))
+    # Canli bildirim gonder
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        loop.create_task(_broadcast({
+            "type": "decision",
+            "analysis_id": analysis.id,
+            "decision": payload.decision,
+            "reviewer": user.email,
+            "risk_score": analysis.fusion_risk_score,
+        }))
+    except Exception:
+        pass
     return DecisionOut(
         id=decision.id,
         analysis_id=decision.analysis_id,
@@ -237,6 +259,70 @@ def similar(analysis_id: str,
             user: User = Depends(get_current_user),
             db: Session = Depends(get_db)) -> list[dict]:
     return similar_cases(db, analysis_id)
+
+
+@router.get("/{analysis_id}/patient.pdf")
+def patient_report_pdf(analysis_id: str,
+                       user: User = Depends(get_current_user),
+                       db: Session = Depends(get_db)) -> Response:
+    """Tek hasta PDF raporu — kesinlesmemis analizler icin de calisir.
+
+    Tum bulgulari, riski, EKG sonucunu ve karar durumunu icerir.
+    """
+    analysis = db.get(Analysis, analysis_id)
+    if not analysis:
+        raise HTTPException(404, "Analiz bulunamadı")
+    study = db.get(Study, analysis.study_id)
+    out = _analysis_out(analysis).model_dump()
+    out["decisions"] = [
+        {
+            "decision": d.decision,
+            "note": d.note,
+            "decided_at": d.decided_at,
+            "reviewer_id": d.reviewer_id,
+        }
+        for d in analysis.decisions
+    ]
+    pdf = patient_report(
+        {"anon_study_hash": study.anon_study_hash if study else "-",
+         "modality": study.modality if study else "-",
+         "created_at": study.created_at if study else None},
+        out,
+    )
+    write_audit(db, user_id=user.id, action="PATIENT_REPORT_DOWNLOADED",
+                entity_type="analysis", entity_id=analysis.id)
+    fname = f"pulsar-hasta-rapor-{analysis.id[:8]}.pdf"
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/{analysis_id}/second-opinion")
+def second_opinion(analysis_id: str,
+                   payload: DecisionRequest,
+                   request: Request,
+                   user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)) -> dict:
+    """Ikinci hekim gorusu — karari degistirmez, yalnizca gorus notu ekler.
+
+    Audit log'a SECOND_OPINION olarak yazilir.
+    """
+    if user.role not in DECISION_ROLES:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "İkinci görüş yalnız hekim/radyolog tarafından verilebilir")
+    analysis = db.get(Analysis, analysis_id)
+    if not analysis:
+        raise HTTPException(404, "Analiz bulunamadı")
+    review = ReviewDecision(
+        analysis_id=analysis.id,
+        reviewer_id=user.id,
+        decision="SECOND_OPINION",
+        note=payload.note,
+    )
+    db.add(review)
+    db.flush()
+    write_audit(db, user_id=user.id, action="SECOND_OPINION",
+                entity_type="analysis", entity_id=analysis.id, ip=client_ip(request))
+    return {"ok": True, "analysis_id": analysis_id, "reviewer_id": user.id}
 
 
 @router.get("/{analysis_id}/signal")

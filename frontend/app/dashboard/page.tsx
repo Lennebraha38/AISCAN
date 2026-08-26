@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, clearTokens, getTokens } from "../../lib/api";
+import { useNotifications } from "../../lib/notifications";
 
 interface AnalysisRow {
   id: string;
@@ -21,6 +22,7 @@ function riskColor(v: number): string | undefined {
 export default function DashboardPage() {
   const [analyses, setAnalyses] = useState<AnalysisRow[]>([]);
   const [error, setError] = useState("");
+  const { critical, clearCritical, connected, notifications } = useNotifications();
 
   useEffect(() => {
     api
@@ -38,12 +40,16 @@ export default function DashboardPage() {
       <nav className="navbar">
         <span className="brand">Pulsar-KKDS</span>
         <Link href="/dashboard">Panel</Link>
-        <Link href="/studies/new">Yeni Çalışma</Link>
+        <Link href="/studies/new">Yeni Calisma</Link>
         <Link href="/approvals">Onay Bekleyenler ({pending})</Link>
         {getTokens()?.role === "admin" && (
-          <Link href="/admin/audit">Denetim Kaydı</Link>
+          <Link href="/admin/audit">Denetim Kaydi</Link>
         )}
         <span style={{ flex: 1 }} />
+        {/* SSE durum gostergeci */}
+        <span className="sse-status" title={connected ? "Canli baglanti aktif" : "Baglanti yok"}>
+          <span className={`sse-dot ${connected ? "connected" : ""}`} />
+        </span>
         <a
           href="#"
           onClick={(e) => {
@@ -52,10 +58,25 @@ export default function DashboardPage() {
             window.location.href = "/login";
           }}
         >
-          Çıkış
+          Cikis
         </a>
       </nav>
       <main className="container">
+        {/* Kritik bulgu toast */}
+        {critical && (
+          <div className="critical-alert">
+            <span className="critical-alert-icon">&#9888;</span>
+            <div>
+              <strong>Kritik Bulgu!</strong>
+              <span>
+                Risk skoru <strong>{critical.risk_score?.toFixed(1)}</strong>/100 olan bir vaka onaylandi.
+                Inceleyen: {critical.reviewer}
+              </span>
+            </div>
+            <button className="critical-alert-close" onClick={clearCritical}>&times;</button>
+          </div>
+        )}
+
         <h1>Klinik Karar Destek Paneli</h1>
         {error && <p style={{ color: "#c0392b" }}>{error}</p>}
 
@@ -69,14 +90,14 @@ export default function DashboardPage() {
             <p style={{ fontSize: 32, margin: 0 }}>{approved}</p>
           </div>
           <div className="card" style={{ flex: 1, minWidth: 200 }}>
-            <h3>Yüksek Risk (≥65)</h3>
+            <h3>Yuksek Risk (≥65)</h3>
             <p style={{ fontSize: 32, margin: 0, color: highRisk ? "#c0392b" : undefined }}>
               {highRisk}
             </p>
           </div>
           {analyses.length > 0 && (
             <div className="card" style={{ flex: 2, minWidth: 280 }}>
-              <h3>Risk Dağılımı</h3>
+              <h3>Risk Dagilimi</h3>
               <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 90 }}>
                 {[0, 1, 2, 3, 4].map((b) => {
                   const n = analyses.filter(
@@ -94,7 +115,7 @@ export default function DashboardPage() {
                     <div key={b} style={{ flex: 1, textAlign: "center" }}>
                       <div style={{ fontSize: 12, color: "#66708a" }}>{n}</div>
                       <div
-                        title={`${b * 20}–${(b + 1) * 20}: ${n} vaka`}
+                        title={`${b * 20}-${b * 20 + 20}: ${n} vaka`}
                         style={{
                           height: `${Math.round((n / max) * 62) + (n ? 6 : 0)}px`,
                           background: colors[b],
@@ -103,7 +124,7 @@ export default function DashboardPage() {
                           marginTop: 2,
                         }}
                       />
-                      <small style={{ color: "#8a93ab" }}>{b * 20}–{(b + 1) * 20}</small>
+                      <small style={{ color: "#8a93ab" }}>{b * 20}-{b * 20 + 20}</small>
                     </div>
                   );
                 })}
@@ -131,7 +152,7 @@ export default function DashboardPage() {
                   <td>
                     {a.top_finding
                       ? <strong>{a.top_finding}</strong>
-                      : <small style={{ color: "#8a93ab" }}>{a.modality ?? "—"} · bulgu yok</small>}
+                      : <small style={{ color: "#8a93ab" }}>{a.modality ?? "-"} · bulgu yok</small>}
                   </td>
                   <td style={{ color: riskColor(a.fusion_risk_score), fontWeight: 600 }}>
                     {a.fusion_risk_score.toFixed(1)}
@@ -139,28 +160,45 @@ export default function DashboardPage() {
                   <td>
                     <span className={`badge ${a.status.toLowerCase()}`}>
                       {a.status === "PENDING_REVIEW"
-                        ? "⏳ Hekim onayı bekliyor"
+                        ? "Hekim onayi bekliyor"
                         : a.status === "APPROVED"
-                          ? "✓ Onaylandı"
-                          : "✗ Reddedildi"}
+                          ? "Onaylandi"
+                          : "Reddedildi"}
                     </span>
                   </td>
                   <td>
-                    <Link href={`/viewer/${a.study_id}`}>Görüntüle</Link>
+                    <Link href={`/viewer/${a.study_id}`}>Goruntule</Link>
                   </td>
                 </tr>
               ))}
               {!analyses.length && (
                 <tr>
                   <td colSpan={5} style={{ color: "#8a93ab" }}>
-                    Henüz analiz yok.{" "}
-                    <Link href="/studies/new">İlk çalışmayı oluştur</Link>.
+                    Henuz analiz yok.{" "}
+                    <Link href="/studies/new">Ilk calismayi olustur</Link>.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+
+        {/* Canli bildirim akisi (admin) */}
+        {getTokens()?.role === "admin" && notifications.length > 0 && (
+          <div className="card" style={{ marginTop: 12 }}>
+            <h3>Canli Bildirimler</h3>
+            <div style={{ maxHeight: 120, overflow: "auto" }}>
+              {notifications.slice(0, 8).map((n) => (
+                <div key={n._key} style={{ fontSize: 12, color: "#66708a", padding: "3px 0", borderBottom: "1px solid #eef0f5" }}>
+                  <span style={{ color: n.type === "decision" ? "#2456d6" : "#8a93ab" }}>
+                    [{n.type === "decision" ? "KARAR" : "SISTEM"}]
+                  </span>{" "}
+                  {n.type === "decision" ? `${n.reviewer} — ${n.decision === "APPROVED" ? "ONAY" : "RED"} (risk: ${n.risk_score?.toFixed(1)})` : "Baglanti kuruldu"}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </main>
     </>
   );

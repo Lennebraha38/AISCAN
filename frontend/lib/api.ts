@@ -137,6 +137,17 @@ export const api = {
       { id: string; study_id: string; status: string; fusion_risk_score: number;
         created_at: string; modality?: string | null; top_finding?: string | null }[]
     >(`/v1/analyses${status ? `?status_filter=${status}` : ""}`),
+  getPatientReport: (id: string) => {
+    const tokens = getTokens();
+    return fetch(`${API_URL}/v1/analyses/${id}/patient.pdf`, {
+      headers: tokens ? { Authorization: `Bearer ${tokens.access_token}` } : {},
+    }).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); });
+  },
+  secondOpinion: (id: string, note: string) =>
+    request<{ ok: boolean }>(`/v1/analyses/${id}/second-opinion`, {
+      method: "POST",
+      body: JSON.stringify({ decision: "APPROVED", note }),
+    }),
 };
 
 export interface VisionFinding {
