@@ -65,7 +65,7 @@ def patient_report(study: dict, analysis: dict) -> bytes:
         c.setFont(fnt(), 9)
         c.setFillColorRGB(0.42, 0.45, 0.52)
         c.drawString(x, y, label)
-        c.setFont(fnt(bold_v))
+        c.setFont(fnt(bold_v), 9)
         c.setFillColorRGB(0.13, 0.24, 0.55)
         c.drawString(x + 120, y, str(value or "-"))
         y -= 16
