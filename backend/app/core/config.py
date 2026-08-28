@@ -16,7 +16,12 @@ def _parse_cors_origins() -> list[str]:
                 return [str(o) for o in parsed]
         except json.JSONDecodeError:
             pass
-    return ["http://localhost:3000"]
+    # Vercel + localhost varsayimlari
+    return [
+        "http://localhost:3000",
+        "https://pulsar-kkds.vercel.app",
+        "https://pulsar-kkds-*.vercel.app",
+    ]
 
 
 @dataclass(frozen=True)

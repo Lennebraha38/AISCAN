@@ -1,6 +1,6 @@
 /** Backend API istemcisi. */
 
-export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 
 export interface Tokens {
   access_token: string;
