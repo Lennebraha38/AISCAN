@@ -148,6 +148,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ decision: "APPROVED", note }),
     }),
+  getDashboardStats: () =>
+    request<{
+      total_analyses: number;
+      pending_reviews: number;
+      last_24h: { total: number; approved: number; rejected: number; high_risk: number };
+    }>("/v1/dashboard/stats"),
 };
 
 export interface VisionFinding {

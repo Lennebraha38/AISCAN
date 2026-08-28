@@ -7,11 +7,13 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { API_URL, getTokens } from "./api";
 
 export interface Notification {
-  type: "decision" | "connected" | "keepalive";
+  type: "decision" | "connected" | "keepalive" | "analysis_started" | "analysis_completed" | "patient_report_generated";
   analysis_id?: string;
+  study_id?: string;
   decision?: string;
   reviewer?: string;
   risk_score?: number;
+  fusion_risk_score?: number;
   user?: string;
   ts: number;
   _key?: number;
@@ -81,6 +83,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
               // Kritik bulgu: risk >=70 ise
               if (data.type === "decision" && (data.risk_score ?? 0) >= 70) {
                 setCritical(data);
+              }
+              // Tarayici bildirimleri
+              if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+                if (data.type === "analysis_completed") {
+                  new Notification("Analiz Tamamlandi", { body: `Risk: ${data.fusion_risk_score?.toFixed(1) ?? "?"}` });
+                } else if (data.type === "patient_report_generated") {
+                  new Notification("Hasta Raporu Hazir", { body: `PDF uretildi: ${data.analysis_id?.slice(0,8)}` });
+                }
               }
             } catch {}
           }

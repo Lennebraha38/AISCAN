@@ -5,13 +5,15 @@ backend'idir; AI çıktısı hekim onayı olmadan kesinleşmez.
 """
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from .core.config import settings
 from .models import init_db, make_engine
 from .api.v1 import analyses, audit, auth, studies
+
+from datetime import datetime, timezone, timedelta
 
 app = FastAPI(
     title=settings.app_name,
@@ -56,6 +58,35 @@ def startup() -> None:
 @app.get("/health", tags=["system"])
 def health() -> dict:
     return {"status": "ok", "service": "backend"}
+
+
+@app.get("/v1/dashboard/stats", tags=["dashboard"])
+def dashboard_stats(user=Depends(auth.get_current_user)):
+    """Son 24 saatin analiz istatistikleri ve bekleyen onay sayisi."""
+    from .models import Analysis
+    from sqlalchemy.orm import Session as S
+
+    db = app.state.SessionLocal()
+    try:
+        since = datetime.now(timezone.utc) - timedelta(hours=24)
+        recent = db.query(Analysis).filter(Analysis.created_at >= since).all()
+        total = db.query(Analysis).count()
+        pending = db.query(Analysis).filter(Analysis.status == "PENDING_REVIEW").count()
+        approved_24h = sum(1 for a in recent if a.status == "APPROVED")
+        rejected_24h = sum(1 for a in recent if a.status == "REJECTED")
+        high_risk_24h = sum(1 for a in recent if (a.fusion_risk_score or 0) >= 65)
+        return {
+            "total_analyses": total,
+            "pending_reviews": pending,
+            "last_24h": {
+                "total": len(recent),
+                "approved": approved_24h,
+                "rejected": rejected_24h,
+                "high_risk": high_risk_24h,
+            },
+        }
+    finally:
+        db.close()
 
 
 app.include_router(auth.router)

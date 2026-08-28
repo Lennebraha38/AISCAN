@@ -39,6 +39,8 @@ export default function ViewerPage() {
   const [secondBusy, setSecondBusy] = useState(false);
   const [secondSent, setSecondSent] = useState(false);
   const [criticalAlert, setCriticalAlert] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [pollTimer, setPollTimer] = useState<ReturnType<typeof setInterval> | null>(null);
 
   const loadAnalysis = useCallback(async (id: string) => {
     try {
@@ -74,6 +76,19 @@ export default function ViewerPage() {
       })
       .catch(() => setError("Calisma yuklenemedi"));
   }, [analysisId, loadAnalysis, studyId]);
+
+  // Analiz tamamlanana kadar 2 saniyede bir yenile
+  useEffect(() => {
+    if (status !== "PENDING_REVIEW" && !analyzing) {
+      if (pollTimer) { clearInterval(pollTimer); setPollTimer(null); }
+      return;
+    }
+    const timer = setInterval(() => {
+      if (analysisId) loadAnalysis(analysisId);
+    }, 2000);
+    setPollTimer(timer);
+    return () => clearInterval(timer);
+  }, [status, analyzing, analysisId]);
 
   // Duz calisma goruntusu
   useEffect(() => {
@@ -260,6 +275,29 @@ export default function ViewerPage() {
                 : "✗ REDDEDILDI"}
         </span>
       </nav>
+
+      {/* Analiz progress bar */}
+      {analyzing && (
+        <div style={{
+          background: "#edf0f6", borderRadius: 8, padding: "12px 16px", marginBottom: 16,
+          display: "flex", alignItems: "center", gap: 12,
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#2456d6" }}>Analiz calisiyor...</div>
+            <div style={{ fontSize: 11, color: "#66708a" }}>AI Core sonuclari isliyor, lutfen bekleyin.</div>
+          </div>
+          <div style={{
+            width: 120, height: 6, background: "#d1d9e6", borderRadius: 3, overflow: "hidden",
+          }}>
+            <div style={{
+              height: "100%", background: "#2456d6", borderRadius: 3,
+              animation: "progress-pulse 1.5s ease-in-out infinite",
+              width: "60%",
+            }} />
+          </div>
+          <style>{`@keyframes progress-pulse { 0%,100%{opacity:.4;width:40%} 50%{opacity:1;width:80%} }`}</style>
+        </div>
+      )}
 
       {/* Onceki tetkik karsilastirma paneli */}
       {showPrev && (

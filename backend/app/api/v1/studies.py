@@ -22,6 +22,14 @@ MAX_ECG_BYTES = 5 * 1024 * 1024
 router = APIRouter(prefix="/v1/studies", tags=["studies"])
 
 
+async def _broadcast(event: dict) -> None:
+    try:
+        from .notifications import broadcast
+        await broadcast(event)
+    except Exception:
+        pass
+
+
 def _study_out(s: Study) -> StudyOut:
     return StudyOut(
         id=s.id,
@@ -87,6 +95,17 @@ async def analyze_study(study_id: str,
     if not study:
         raise HTTPException(404, "Çalışma bulunamadı")
 
+    # Analiz basladi bildirimi
+    try:
+        import asyncio as _aio
+        _aio.get_event_loop().create_task(_broadcast({
+            "type": "analysis_started",
+            "study_id": study.id,
+            "user": user.email,
+        }))
+    except Exception:
+        pass
+
     vision_result = nlp_result = ecg_result = fusion_result = None
     try:
         if image is not None and image.filename:
@@ -134,6 +153,18 @@ async def analyze_study(study_id: str,
     store_embedding(db, analysis)
     write_audit(db, user_id=user.id, action="ANALYSIS_CREATED", entity_type="analysis",
                 entity_id=analysis.id, ip=client_ip(request))
+    # Analiz tamamlandi bildirimi
+    try:
+        import asyncio as _aio
+        _aio.get_event_loop().create_task(_broadcast({
+            "type": "analysis_completed",
+            "analysis_id": analysis.id,
+            "study_id": study.id,
+            "fusion_risk_score": analysis.fusion_risk_score,
+            "user": user.email,
+        }))
+    except Exception:
+        pass
     return {
         "analysis_id": analysis.id,
         "status": analysis.status,

@@ -26,6 +26,40 @@ async def _broadcast(event: dict) -> None:
         pass
 
 
+def _auto_generate_patient_pdf(analysis: Analysis, db: Session) -> None:
+    """Analiz kesinlestikten sonra hasta PDF'ini otomatik uret."""
+    study = db.get(Study, analysis.study_id)
+    out = _analysis_out(analysis).model_dump()
+    out["decisions"] = [
+        {
+            "decision": d.decision,
+            "note": d.note,
+            "decided_at": d.decided_at,
+            "reviewer_id": d.reviewer_id,
+        }
+        for d in analysis.decisions
+    ]
+    try:
+        patient_report(
+            {"anon_study_hash": study.anon_study_hash if study else "-",
+             "modality": study.modality if study else "-",
+             "created_at": study.created_at if study else None},
+            out,
+        )
+    except Exception:
+        pass
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        loop.create_task(_broadcast({
+            "type": "patient_report_generated",
+            "analysis_id": analysis.id,
+            "ts": int(__import__("time").time()),
+        }))
+    except Exception:
+        pass
+
+
 def _strip_cams(vision: dict | None) -> dict | None:
     """Base64 CAM görüntülerini yanıttan çıkarır (payload ~1.8MB → KB'lar)."""
     if not vision:
@@ -242,6 +276,11 @@ def decide(analysis_id: str,
             "reviewer": user.email,
             "risk_score": analysis.fusion_risk_score,
         }))
+    except Exception:
+        pass
+    # Karardan sonra otomatik hasta PDF uret
+    try:
+        _auto_generate_patient_pdf(analysis, db)
     except Exception:
         pass
     return DecisionOut(

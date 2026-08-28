@@ -12,7 +12,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="tr">
       <body>
         <NotificationProvider>
-          {/* MDR / SaMD zorunlu uyari bandi */}
           <div className="samd-band">
             Bu sistem bir <strong>Karar Destek Sistemidir (SaMD)</strong>. Nihai klinik karar hekim
             sorumlulugundadir.

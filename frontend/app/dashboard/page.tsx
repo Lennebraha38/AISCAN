@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, clearTokens, getTokens } from "../../lib/api";
 import { useNotifications } from "../../lib/notifications";
+import NotificationBell from "../../components/NotificationBell";
 
 interface AnalysisRow {
   id: string;
@@ -15,6 +16,12 @@ interface AnalysisRow {
   top_finding?: string | null;
 }
 
+interface DashboardStats {
+  total_analyses: number;
+  pending_reviews: number;
+  last_24h: { total: number; approved: number; rejected: number; high_risk: number };
+}
+
 function riskColor(v: number): string | undefined {
   return v >= 65 ? "#c0392b" : v >= 35 ? "#b7791f" : undefined;
 }
@@ -22,16 +29,15 @@ function riskColor(v: number): string | undefined {
 export default function DashboardPage() {
   const [analyses, setAnalyses] = useState<AnalysisRow[]>([]);
   const [error, setError] = useState("");
+  const [stats, setStats] = useState<DashboardStats | null>(null);
   const { critical, clearCritical, connected, notifications } = useNotifications();
 
   useEffect(() => {
-    api
-      .listAnalyses()
-      .then(setAnalyses)
-      .catch((e) => setError(e.message));
+    api.listAnalyses().then(setAnalyses).catch((e) => setError(e.message));
+    api.getDashboardStats().then(setStats).catch(() => {});
   }, []);
 
-  const pending = analyses.filter((a) => a.status === "PENDING_REVIEW").length;
+  const pending = stats?.pending_reviews ?? analyses.filter((a) => a.status === "PENDING_REVIEW").length;
   const approved = analyses.filter((a) => a.status === "APPROVED").length;
   const highRisk = analyses.filter((a) => a.fusion_risk_score >= 65).length;
 
@@ -41,12 +47,22 @@ export default function DashboardPage() {
         <span className="brand">Pulsar-KKDS</span>
         <Link href="/dashboard">Panel</Link>
         <Link href="/studies/new">Yeni Calisma</Link>
-        <Link href="/approvals">Onay Bekleyenler ({pending})</Link>
+        <Link href="/approvals">
+          Onay Bekleyenler
+          {pending > 0 && (
+            <span style={{
+              background: "#c0392b", color: "#fff", borderRadius: 10, fontSize: 11,
+              padding: "1px 7px", marginLeft: 6, fontWeight: 700,
+            }}>
+              {pending}
+            </span>
+          )}
+        </Link>
         {getTokens()?.role === "admin" && (
           <Link href="/admin/audit">Denetim Kaydi</Link>
         )}
         <span style={{ flex: 1 }} />
-        {/* SSE durum gostergeci */}
+        <NotificationBell />
         <span className="sse-status" title={connected ? "Canli baglanti aktif" : "Baglanti yok"}>
           <span className={`sse-dot ${connected ? "connected" : ""}`} />
         </span>
@@ -62,7 +78,6 @@ export default function DashboardPage() {
         </a>
       </nav>
       <main className="container">
-        {/* Kritik bulgu toast */}
         {critical && (
           <div className="critical-alert">
             <span className="critical-alert-icon">&#9888;</span>
@@ -81,18 +96,25 @@ export default function DashboardPage() {
         {error && <p style={{ color: "#c0392b" }}>{error}</p>}
 
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          <div className="card" style={{ flex: 1, minWidth: 200 }}>
+          <div className="card" style={{ flex: 1, minWidth: 180 }}>
             <h3>Bekleyen Onay</h3>
-            <p style={{ fontSize: 32, margin: 0 }}>{pending}</p>
+            <p style={{ fontSize: 32, margin: 0, color: pending > 0 ? "#b7791f" : undefined }}>{pending}</p>
           </div>
-          <div className="card" style={{ flex: 1, minWidth: 200 }}>
-            <h3>Onaylanan Analiz</h3>
-            <p style={{ fontSize: 32, margin: 0 }}>{approved}</p>
+          <div className="card" style={{ flex: 1, minWidth: 180 }}>
+            <h3>Toplam Analiz</h3>
+            <p style={{ fontSize: 32, margin: 0 }}>{stats?.total_analyses ?? analyses.length}</p>
           </div>
-          <div className="card" style={{ flex: 1, minWidth: 200 }}>
-            <h3>Yuksek Risk (≥65)</h3>
-            <p style={{ fontSize: 32, margin: 0, color: highRisk ? "#c0392b" : undefined }}>
-              {highRisk}
+          <div className="card" style={{ flex: 1, minWidth: 180 }}>
+            <h3>Son 24 Saat</h3>
+            <p style={{ fontSize: 32, margin: 0 }}>{stats?.last_24h.total ?? 0}</p>
+            <div style={{ fontSize: 11, color: "#66708a", marginTop: 2 }}>
+              ✓ {stats?.last_24h.approved ?? 0} onay · ✗ {stats?.last_24h.rejected ?? 0} red
+            </div>
+          </div>
+          <div className="card" style={{ flex: 1, minWidth: 180 }}>
+            <h3>Yuksek Risk (24s)</h3>
+            <p style={{ fontSize: 32, margin: 0, color: (stats?.last_24h.high_risk ?? 0) > 0 ? "#c0392b" : undefined }}>
+              {stats?.last_24h.high_risk ?? 0}
             </p>
           </div>
           {analyses.length > 0 && (
@@ -147,7 +169,11 @@ export default function DashboardPage() {
             </thead>
             <tbody>
               {analyses.map((a) => (
-                <tr key={a.id}>
+                <tr
+                  key={a.id}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => window.location.href = `/viewer/${a.study_id}?analysis=${a.id}`}
+                >
                   <td>{new Date(a.created_at).toLocaleString("tr-TR")}</td>
                   <td>
                     {a.top_finding
@@ -167,7 +193,7 @@ export default function DashboardPage() {
                     </span>
                   </td>
                   <td>
-                    <Link href={`/viewer/${a.study_id}`}>Goruntule</Link>
+                    <Link href={`/viewer/${a.study_id}?analysis=${a.id}`} onClick={(e) => e.stopPropagation()}>Goruntule</Link>
                   </td>
                 </tr>
               ))}
@@ -183,17 +209,18 @@ export default function DashboardPage() {
           </table>
         </div>
 
-        {/* Canli bildirim akisi (admin) */}
         {getTokens()?.role === "admin" && notifications.length > 0 && (
           <div className="card" style={{ marginTop: 12 }}>
             <h3>Canli Bildirimler</h3>
             <div style={{ maxHeight: 120, overflow: "auto" }}>
               {notifications.slice(0, 8).map((n) => (
                 <div key={n._key} style={{ fontSize: 12, color: "#66708a", padding: "3px 0", borderBottom: "1px solid #eef0f5" }}>
-                  <span style={{ color: n.type === "decision" ? "#2456d6" : "#8a93ab" }}>
-                    [{n.type === "decision" ? "KARAR" : "SISTEM"}]
+                  <span style={{ color: n.type === "decision" ? "#2456d6" : n.type === "analysis_completed" ? "#1e8e4e" : "#8a93ab" }}>
+                    [{n.type === "decision" ? "KARAR" : n.type === "analysis_completed" ? "TAMAMLANDI" : n.type === "analysis_started" ? "BASLATILDI" : "SISTEM"}]
                   </span>{" "}
-                  {n.type === "decision" ? `${n.reviewer} — ${n.decision === "APPROVED" ? "ONAY" : "RED"} (risk: ${n.risk_score?.toFixed(1)})` : "Baglanti kuruldu"}
+                  {n.type === "decision" ? `${n.reviewer} — ${n.decision === "APPROVED" ? "ONAY" : "RED"} (risk: ${n.risk_score?.toFixed(1)})` :
+                   n.type === "analysis_completed" ? `Risk: ${n.fusion_risk_score?.toFixed(1)}` :
+                   n.type === "analysis_started" ? `${n.user} baslatti` : "Baglanti kuruldu"}
                 </div>
               ))}
             </div>
