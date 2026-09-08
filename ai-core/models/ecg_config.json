@@ -1,0 +1,7 @@
+{
+  "architecture": "ECGResNet-1D",
+  "params": 2188867,
+  "target_fs": 250,
+  "input_len": 2500,
+  "best_val_macro_f1": 0.773
+}

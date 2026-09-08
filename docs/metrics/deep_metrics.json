@@ -1,0 +1,67 @@
+{
+  "model": "ECGResNet-1D",
+  "test_macro_f1": 0.7418,
+  "best_val_macro_f1": 0.773,
+  "report": {
+    "normal": {
+      "precision": 0.9310344827586207,
+      "recall": 0.9,
+      "f1-score": 0.9152542372881356,
+      "support": 30.0
+    },
+    "arrhythmia": {
+      "precision": 0.6842105263157895,
+      "recall": 0.8666666666666667,
+      "f1-score": 0.7647058823529411,
+      "support": 30.0
+    },
+    "block": {
+      "precision": 0.6923076923076923,
+      "recall": 0.45,
+      "f1-score": 0.5454545454545454,
+      "support": 20.0
+    },
+    "accuracy": 0.775,
+    "macro avg": {
+      "precision": 0.7691842337940341,
+      "recall": 0.7388888888888889,
+      "f1-score": 0.7418048883652073,
+      "support": 80.0
+    },
+    "weighted avg": {
+      "precision": 0.7787938014798269,
+      "recall": 0.775,
+      "f1-score": 0.7663486812290401,
+      "support": 80.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      27,
+      2,
+      1
+    ],
+    [
+      1,
+      26,
+      3
+    ],
+    [
+      1,
+      10,
+      9
+    ]
+  ],
+  "history": {
+    "train_loss": [
+      0.8867,
+      0.6143,
+      0.5194
+    ],
+    "val_f1": [
+      0.1818,
+      0.6794,
+      0.773
+    ]
+  }
+}
