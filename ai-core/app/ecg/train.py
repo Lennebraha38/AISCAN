@@ -26,6 +26,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
+import torch
+import torch.nn as nn
 
 from app.ecg.labels import CLASS_NAMES, SUPERCLASSES
 from app.ecg.preprocess import preprocess_record
@@ -130,21 +132,16 @@ def _batch(X: np.memmap, idx: np.ndarray, augment: bool = False, rng: np.random.
 
 
 # ----------------------------------------------------------- yardimci ----
-class FocalLoss(__import__("torch").nn.Module):
+class FocalLoss(nn.Module):
     """Sinif dengesizligi icin focal loss (gamma=2), sinif agirlikli alpha ile."""
 
     def __init__(self, alpha: np.ndarray, gamma: float = 2.0):
-        import torch
-
         super().__init__()
         self.register_buffer("alpha_t", torch.tensor(alpha, dtype=torch.float32))
         self.gamma = gamma
 
-    def forward(self, logits: "torch.Tensor", targets: "torch.Tensor") -> "torch.Tensor":
-        import torch
-        import torch.nn.functional as F
-
-        ce = F.cross_entropy(logits, targets, reduction="none")
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        ce = nn.functional.cross_entropy(logits, targets, reduction="none")
         pt = torch.exp(-ce)
         alpha_t = self.alpha_t[targets]
         return (alpha_t * (1 - pt) ** self.gamma * ce).mean()
@@ -218,8 +215,6 @@ def run_baseline(data_dir: Path, out_dir: Path) -> None:
 # ------------------------------------------------------------------ deep ----
 def run_deep(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int,
              batch_size: int, loss: str, folds: int) -> None:
-    import torch
-    import torch.nn as nn
     from sklearn.metrics import classification_report, confusion_matrix, f1_score
     from sklearn.model_selection import StratifiedKFold
 
@@ -394,7 +389,6 @@ def _plot(history: dict, cm: list[list[int]]) -> None:
 # ------------------------------------------------------------ robustness ----
 def run_robustness(data_dir: Path, models_dir: Path, out_dir: Path) -> None:
     """External validation simülasyonu: gurultu + baseline wander bozulmalari."""
-    import torch
     from sklearn.metrics import f1_score
 
     X, y, _ids, _sub = load_cache(data_dir)
@@ -451,8 +445,6 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
     Alt grup hedefleri SUBCLASS_BY_CODE haritasinden uretilir; nadir alt gruplar
     (MIN_SUBCLASS_COUNT alti) 'other' olarak gruplanir. Sonuclar stage2_metrics.json'a yazilir.
     """
-    import torch
-    import torch.nn as nn
     from sklearn.metrics import classification_report, f1_score
 
     torch.set_num_threads(max(1, __import__("os").cpu_count() - 1))

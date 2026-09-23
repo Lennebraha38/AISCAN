@@ -13,5 +13,7 @@ sqlalchemy
 python-jose[cryptography]
 pydantic
 pydantic-settings
+python-multipart
+email-validator
 psycopg2-binary
 reportlab

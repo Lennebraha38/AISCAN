@@ -29,6 +29,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install flake8 pytest
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install -r requirements-ci.txt
     - name: Lint with flake8
       run: |
         # stop the build if there are Python syntax errors or undefined names
@@ -36,5 +37,10 @@ jobs:
         # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Test with pytest
+      if: matrix.python-version == '3.11'
       run: |
-        pytest
+        pip install --index-url https://download.pytorch.org/whl/cpu torch
+        cd ai-core && PYTHONPATH="$PWD" python -m pytest tests/ -q && cd ..
+        cd backend && PYTHONPATH="$PWD" python -m pytest tests/ -q && cd ..
+        cd anonymizer && PYTHONPATH="$PWD/pii_nlp:$PWD/dicom_cleaner:$PWD/ecg_deid" \
+          python -m pytest pii_nlp/tests/ dicom_cleaner/tests/ ecg_deid/tests/ -q
