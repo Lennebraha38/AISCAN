@@ -40,9 +40,14 @@ cd ai-core
 ../.venv/bin/python -m app.ecg.train baseline    --data-dir ../data/ecg
 ../.venv/bin/python -m app.ecg.train deep        --data-dir ../data/ecg
 ../.venv/bin/python -m app.ecg.train robustness  --data-dir ../data/ecg
+../.venv/bin/python -m app.ecg.train stage2      --data-dir ../data/ecg # 2. aşama (fine-grained)
 ```
 
 Sonuçlar ve grafikler: `docs/metrics/` · Model: `ai-core/models/`
+
+> CI (GitHub Actions): `.github/workflows/train.yml` veri indirme → cache → eğitim →
+> robustness → stage2 sürecini otomatik çalıştırır ve sonuçları (model + metric'ler +
+> figürler) repo'ya commit eder. Cihaz içi depolama gerekmez.
 
 ## Hızlı Başlangıç
 

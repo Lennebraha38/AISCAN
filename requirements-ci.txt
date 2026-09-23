@@ -1,0 +1,17 @@
+# Teknofest Eval CI ortami icin bagimliliklar (torch ayri; asagida cpu index'ten kurulur)
+numpy
+scipy
+scikit-learn
+httpx
+matplotlib
+pytest
+pillow
+pydicom
+fastapi
+uvicorn[standard]
+sqlalchemy
+python-jose[cryptography]
+pydantic
+pydantic-settings
+psycopg2-binary
+reportlab

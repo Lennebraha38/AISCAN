@@ -1,0 +1,97 @@
+name: Teknofest-Eval
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: teknofest-eval
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache raw ECG data
+        uses: actions/cache@v4
+        with:
+          path: data/ecg/raw
+          key: ecgraw-${{ hashFiles('data/ecg/selected.jsonl') }}
+
+      - name: Install dependencies
+        run: |
+          pip install -U pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -r requirements-ci.txt
+
+      - name: Tests (ai-core)
+        run: |
+          cd ai-core
+          PYTHONPATH="$PWD" python -m pytest tests/ -q
+
+      - name: Tests (backend)
+        run: |
+          cd backend
+          PYTHONPATH="$PWD" python -m pytest tests/ -q
+
+      - name: Tests (anonymizer)
+        run: |
+          cd anonymizer
+          PYTHONPATH="$PWD/pii_nlp:$PWD/dicom_cleaner:$PWD/ecg_deid" \
+            python -m pytest pii_nlp/tests/ dicom_cleaner/tests/ ecg_deid/tests/ -q
+
+      - name: Fetch data
+        run: |
+          cd ai-core
+          python -m app.ecg.data fetch --data-dir ../data/ecg --concurrency 16
+
+      - name: Build cache
+        run: |
+          cd ai-core
+          python -m app.ecg.train build-cache --data-dir ../data/ecg
+
+      - name: Baseline
+        run: |
+          cd ai-core
+          python -m app.ecg.train baseline --data-dir ../data/ecg
+
+      - name: Deep training (folds=5, focal)
+        run: |
+          cd ai-core
+          python -m app.ecg.train deep --data-dir ../data/ecg --epochs 30 --loss focal --folds 5
+
+      - name: Robustness
+        run: |
+          cd ai-core
+          python -m app.ecg.train robustness --data-dir ../data/ecg
+
+      - name: Stage-2 (fine-grained)
+        run: |
+          cd ai-core
+          python -m app.ecg.train stage2 --data-dir ../data/ecg --epochs-stage2 15
+
+      - name: Commit artifacts
+        run: |
+          git config user.name "AISCAN CI"
+          git config user.email "ci@users.noreply.github.com"
+          git add ai-core/models/ecg_resnet.pt ai-core/models/ecg_config.json \
+                  docs/figures docs/metrics
+          if git diff --cached --quiet; then
+            echo "degisiklik yok"
+          else
+            git commit -m "ci: Teknofest EKG eval sonuclari [skip ci]"
+            git push
+          fi
