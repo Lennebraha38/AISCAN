@@ -43,4 +43,4 @@ jobs:
         cd ai-core && PYTHONPATH="$PWD" python -m pytest tests/ -q && cd ..
         cd backend && PYTHONPATH="$PWD" python -m pytest tests/ -q && cd ..
         cd anonymizer && PYTHONPATH="$PWD/pii_nlp:$PWD/dicom_cleaner:$PWD/ecg_deid" \
-          python -m pytest pii_nlp/tests/ dicom_cleaner/tests/ ecg_deid/tests/ -q
+          python -m pytest tests/ -q
