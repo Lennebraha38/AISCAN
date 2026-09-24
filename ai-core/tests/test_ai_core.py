@@ -52,7 +52,9 @@ def test_vision_analyze_returns_findings_and_cam():
     cam = next(f for f in body["findings"] if f["cam_image_b64"])
     raw = base64.b64decode(cam["cam_image_b64"])
     assert raw[:8] == b"\x89PNG\r\n\x1a\n"
-    assert body["xai_method"].startswith(("energy-saliency", "grad-cam"))
+    assert body["xai_method"].startswith(
+        ("energy-saliency", "grad-cam", "finding-saliency")
+    )
 
 
 def test_vision_deterministic():
