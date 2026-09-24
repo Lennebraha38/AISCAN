@@ -15,7 +15,7 @@ jobs:
   evaluate:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 540
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,7 +56,7 @@ jobs:
       - name: Fetch data
         run: |
           cd ai-core
-          python -m app.ecg.data fetch --data-dir ../data/ecg --concurrency 16
+          python -m app.ecg.data fetch --data-dir ../data/ecg --concurrency 64
 
       - name: Build cache
         run: |
