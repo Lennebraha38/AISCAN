@@ -43,6 +43,14 @@ cd ai-core
 ../.venv/bin/python -m app.ecg.train stage2      --data-dir ../data/ecg # 2. aşama (fine-grained)
 ```
 
+**Config dosyası ile eğitim (yeni):**
+
+```bash
+cd ai-core
+../.venv/bin/python -m app.ecg.train deep --config config.yaml --data-dir ../data/ecg
+../.venv/bin/python -m app.ecg.train stage2 --config config.yaml --data-dir ../data/ecg
+```
+
 Sonuçlar ve grafikler: `docs/metrics/` · Model: `ai-core/models/`
 
 > CI (GitHub Actions): `.github/workflows/train.yml` veri indirme → cache → eğitim →
@@ -77,6 +85,47 @@ PYTHONPATH=ai-core uvicorn app.main:app --port 8001
 cd frontend && npm install && npm run dev
 ```
 
+## Model Export (ONNX / TorchScript)
+
+Eğitilmiş modeli production için ONNX veya TorchScript formatına dönüştürme:
+
+```bash
+# ONNX export
+python scripts/export_onnx.py \
+    --model-path ai-core/models/ecg_resnet.pt \
+    --output-path ai-core/models/ecg_resnet.onnx \
+    --verify
+
+# TorchScript export (ekstra)
+python scripts/export_onnx.py \
+    --model-path ai-core/models/ecg_resnet.pt \
+    --torchscript-path ai-core/models/ecg_resnet.ts
+```
+
+ONNX modeli `onnxruntime` ile CPU/GPU'da hızlı inference için kullanılabilir.
+
+## Metrik Görselleri
+
+Commit edilmiş metrik dosyalarından (`docs/metrics/*.json`) tekrar üretilebilir
+karışıklık matrisi ve öğrenme eğrisi grafikleri:
+
+```bash
+python scripts/plot_metrics.py
+# -> docs/figures/confusion_matrix.png, learning_curves.png, baseline_confusion_matrix.png
+```
+
+## Demo Verileri (sentetik)
+
+Repo'da 3 adet **sentetik** demo EKG kaydı bulunur (`data/ecg/demo/`):
+`SX00001` (normal), `SX00002` (AFib), `SX00003` (LBBB). Bu kayıtlar
+`scripts/gen_demo_ecg.py` ile üretilen matematiksel dalga formlarıdır; gerçek
+hasta verisi değildir ve PhysioNet kayıtlarıyla karıştırılmamalıdır (her `.hea`
+içinde `#Synthetic: true` işareti vardır). Yeniden üretmek için:
+
+```bash
+python scripts/gen_demo_ecg.py data/ecg/demo
+```
+
 ## Testler
 
 ```bash
@@ -86,6 +135,19 @@ PYTHONPATH=anonymizer/pii_nlp      pytest anonymizer/tests/test_pii_nlp.py
 PYTHONPATH=ai-core                 pytest ai-core/tests
 PYTHONPATH=backend                 pytest backend/tests
 cd frontend && npm run build       # tip kontrolü dahil
+```
+
+**Smoke testleri (hızlı doğrulama; ekstra PYTHONPATH gerekmez):**
+
+```bash
+# ai-core
+cd ai-core && python -m pytest tests/test_smoke.py -v
+
+# backend
+cd backend && python -m pytest tests/test_smoke.py -v
+
+# anonymizer (DICOM + PII + EKG .hea uçtan uca)
+cd anonymizer && python -m pytest tests/test_smoke.py -v
 ```
 
 ## Depo Yapısı

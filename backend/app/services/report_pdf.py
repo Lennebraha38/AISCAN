@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
+from pathlib import Path
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase import pdfmetrics
@@ -16,9 +18,74 @@ from reportlab.pdfgen import canvas
 from reportlab.graphics.barcode.qr import QrCodeWidget
 from reportlab.graphics.shapes import Drawing
 
-_FONT_DIR = "/usr/share/fonts/truetype/dejavu"
-pdfmetrics.registerFont(TTFont("DVS", f"{_FONT_DIR}/DejaVuSans.ttf"))
-pdfmetrics.registerFont(TTFont("DVSB", f"{_FONT_DIR}/DejaVuSans-Bold.ttf"))
+# Turkce karakterleri (s, g, i, I) destekleyen bir TrueType ailesi bul.
+# Linux/macOS/Windows'ta ortak adaylar denenir; hicbiri yoksa reportlab'in
+# paketledigi Bitstream Vera'ya, o da yoksa base-14 Helvetica'ya dusulur.
+# Boylece modul platformdan bagimsiz olarak import edilebilir.
+_FONT_CANDIDATES_REGULAR = [
+    os.getenv("PULSAR_PDF_FONT", ""),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/local/share/fonts/DejaVuSans.ttf",
+    r"C:\Windows\Fonts\DejaVuSans.ttf",
+    r"C:\Windows\Fonts\segoeui.ttf",
+    r"C:\Windows\Fonts\calibri.ttf",
+    r"C:\Windows\Fonts\arial.ttf",
+    "/Library/Fonts/DejaVuSans.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+]
+_FONT_CANDIDATES_BOLD = [
+    os.getenv("PULSAR_PDF_FONT_BOLD", ""),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/local/share/fonts/DejaVuSans-Bold.ttf",
+    r"C:\Windows\Fonts\DejaVuSans-Bold.ttf",
+    r"C:\Windows\Fonts\segoeuib.ttf",
+    r"C:\Windows\Fonts\calibrib.ttf",
+    r"C:\Windows\Fonts\arialbd.ttf",
+    "/Library/Fonts/DejaVuSans-Bold.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+]
+
+
+def _first_existing(paths: list[str]) -> str | None:
+    for p in paths:
+        if p and Path(p).is_file():
+            return p
+    return None
+
+
+def _register_fonts() -> tuple[str, str]:
+    """DVS (regular) ve DVSB (bold) font adlarini kaydeder; kullanilan
+    gercek aile adlarini dondurur."""
+    import reportlab
+
+    rl_fonts = Path(reportlab.__file__).resolve().parent / "fonts"
+    reg = _first_existing([*_FONT_CANDIDATES_REGULAR, str(rl_fonts / "Vera.ttf")])
+    bold = _first_existing([*_FONT_CANDIDATES_BOLD, str(rl_fonts / "VeraBd.ttf")])
+
+    try:
+        if reg:
+            pdfmetrics.registerFont(TTFont("DVS", reg))
+        else:  # son care: base-14 (Turkce karakterler sinirli olabilir)
+            pdfmetrics.registerFont(pdfmetrics.Font("DVS", "Helvetica", "WinAnsiEncoding"))
+    except Exception:
+        pdfmetrics.registerFont(pdfmetrics.Font("DVS", "Helvetica", "WinAnsiEncoding"))
+
+    try:
+        if bold:
+            pdfmetrics.registerFont(TTFont("DVSB", bold))
+        else:
+            pdfmetrics.registerFont(pdfmetrics.Font("DVSB", "Helvetica-Bold", "WinAnsiEncoding"))
+    except Exception:
+        pdfmetrics.registerFont(pdfmetrics.Font("DVSB", "Helvetica-Bold", "WinAnsiEncoding"))
+
+    return (reg or "Helvetica", bold or "Helvetica-Bold")
+
+
+FONT_REGULAR, FONT_BOLD = _register_fonts()
 
 
 def verification_code(analysis_id: str, decided_at) -> str:

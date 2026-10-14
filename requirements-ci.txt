@@ -2,6 +2,7 @@
 numpy
 scipy
 scikit-learn
+pyyaml
 httpx
 matplotlib
 pytest

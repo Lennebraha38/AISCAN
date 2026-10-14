@@ -1,0 +1,80 @@
+# ECG Training Configuration
+# Used by train.py --config option
+
+# Data settings
+data:
+  target_fs: 250
+  target_duration_sec: 10
+  n_leads: 12
+  cache_dir: "cache"
+
+# Model architecture
+model:
+  name: "ECGResNet-1D"
+  n_classes: 3
+  in_channels: 12
+  dropout: 0.3
+  stem_kernel: 11
+  stem_stride: 2
+  channels: [32, 64, 128, 256]
+  blocks_per_stage: [2, 2, 2, 2]
+
+# Training hyperparameters
+training:
+  epochs: 40
+  batch_size: 64
+  learning_rate: 3e-4
+  weight_decay: 1e-4
+  loss: "focal"  # "focal" or "ce"
+  focal_gamma: 2.0
+  label_smoothing: 0.05
+  grad_clip: 5.0
+  early_stopping_patience: 8
+  cosine_annealing: true
+
+# Data augmentation
+augmentation:
+  gaussian_noise_std: 0.03
+  time_shift_range: 150  # samples at target_fs
+  scale_range: [0.9, 1.1]
+  lead_scale_range: [0.95, 1.05]
+
+# Calibration
+calibration:
+  bias_tune_rounds: 4
+  bias_tune_span: 1.6
+  bias_tune_steps: 41
+
+# Cross-validation
+cv:
+  folds: 5
+  stratified: true
+  random_state: 42
+
+# Stage 2 (fine-grained)
+stage2:
+  epochs: 15
+  batch_size: 64
+  learning_rate: 3e-3
+  weight_decay: 1e-3
+  min_subclass_count: 40
+  max_subclasses_per_super: 8
+  early_stopping_patience: 5
+
+# Robustness testing
+robustness:
+  noise_levels: [0.05, 0.10, 0.20]
+  baseline_wander_amplitude: 0.3
+
+# Paths
+paths:
+  data_dir: "../data/ecg"
+  models_dir: "models"
+  metrics_dir: "../../docs/metrics"
+  figures_dir: "../../docs/figures"
+
+# Logging
+logging:
+  log_interval: 500
+  save_best_only: true
+  verbose: true

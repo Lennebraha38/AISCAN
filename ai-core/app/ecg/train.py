@@ -7,6 +7,9 @@ Kullanim:
     python -m app.ecg.train robustness  --data-dir ../data/ecg
     python -m app.ecg.train stage2      --data-dir ../data/ecg --epochs-stage2 15
 
+Config dosyasi ile:
+    python -m app.ecg.train deep --config config.yaml
+
 Ciktilar:
     data/ecg/cache/            X.npy (fp16 memmap), y.npy, ids.json, subclasses.json
     ai-core/models/ecg_resnet.pt + ecg_config.json + ecg_finegrained.pt
@@ -33,8 +36,60 @@ from app.ecg.labels import CLASS_NAMES, SUPERCLASSES
 from app.ecg.preprocess import preprocess_record
 from app.ecg.model import ECGResNet, count_parameters
 
+# Config loading
+def load_config(config_path: Path | None) -> dict:
+    """Load YAML config if provided, else return defaults."""
+    if config_path and config_path.exists():
+        try:
+            import yaml
+            with open(config_path) as f:
+                return yaml.safe_load(f)
+        except ImportError:
+            print("Warning: PyYAML not installed, using CLI args only")
+    return {}
+
+
+def merge_config(base: dict, override: dict) -> dict:
+    """Recursive (deep) merge; override degerleri base'i ezer."""
+    result = base.copy()
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = merge_config(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+# Default configuration (can be overridden by YAML)
+DEFAULT_CFG = {
+    "data": {"target_fs": 250, "target_duration_sec": 10},
+    "model": {"n_classes": 3, "in_channels": 12, "dropout": 0.3},
+    "training": {
+        "epochs": 40, "batch_size": 64, "learning_rate": 3e-4,
+        "weight_decay": 1e-4, "loss": "focal", "focal_gamma": 2.0,
+        "label_smoothing": 0.05, "grad_clip": 5.0,
+        "early_stopping_patience": 8, "cosine_annealing": True
+    },
+    "augmentation": {
+        "gaussian_noise_std": 0.03, "time_shift_range": 150,
+        "scale_range": [0.9, 1.1], "lead_scale_range": [0.95, 1.05]
+    },
+    "calibration": {"bias_tune_rounds": 4, "bias_tune_span": 1.6, "bias_tune_steps": 41},
+    "cv": {"folds": 5, "stratified": True, "random_state": 42},
+    "stage2": {
+        "epochs": 15, "batch_size": 64, "learning_rate": 3e-3,
+        "weight_decay": 1e-3, "min_subclass_count": 40,
+        "max_subclasses_per_super": 8, "early_stopping_patience": 5
+    },
+    "robustness": {"noise_levels": [0.05, 0.10, 0.20], "baseline_wander_amplitude": 0.3},
+    "paths": {"data_dir": "../data/ecg", "models_dir": "models",
+              "metrics_dir": "../../docs/metrics", "figures_dir": "../../docs/figures"},
+}
+
 TARGET_FS = 250
 N_CLASSES = len(SUPERCLASSES)
+
+# Global config (populated in main)
+CFG = DEFAULT_CFG.copy()
 
 
 # ---------------------------------------------------------------- cache ----
@@ -118,16 +173,20 @@ def _batch(X: np.memmap, idx: np.ndarray, augment: bool = False, rng: np.random.
     if not augment:
         return xb
     n = xb.shape[0]
-    xb = xb + rng.normal(0, 0.03, xb.shape).astype(np.float32)
-    shifts = rng.integers(-150, 150, size=n)
+    aug_cfg = CFG.get("augmentation", {})
+    xb = xb + rng.normal(0, aug_cfg.get("gaussian_noise_std", 0.03), xb.shape).astype(np.float32)
+    shift_range = aug_cfg.get("time_shift_range", 150)
+    shifts = rng.integers(-shift_range, shift_range, size=n)
     timed = xb.copy()
     for i, s in enumerate(shifts):
         if s > 0:
             timed[i, :, s:] = xb[i, :, :-s]
         elif s < 0:
             timed[i, :, :s] = xb[i, :, -s:]
-    scale = rng.uniform(0.9, 1.1, size=(n, 1, 1)).astype(np.float32)
-    lead_scale = rng.uniform(0.95, 1.05, size=(n, 12, 1)).astype(np.float32)
+    scale_range = aug_cfg.get("scale_range", [0.9, 1.1])
+    lead_scale_range = aug_cfg.get("lead_scale_range", [0.95, 1.05])
+    scale = rng.uniform(scale_range[0], scale_range[1], size=(n, 1, 1)).astype(np.float32)
+    lead_scale = rng.uniform(lead_scale_range[0], lead_scale_range[1], size=(n, 12, 1)).astype(np.float32)
     return timed * scale * lead_scale
 
 
@@ -218,11 +277,14 @@ def run_deep(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int,
     from sklearn.metrics import classification_report, confusion_matrix, f1_score
     from sklearn.model_selection import StratifiedKFold
 
+    train_cfg = CFG.get("training", {})
+    cv_cfg = CFG.get("cv", {})
+    
     torch.set_num_threads(max(1, __import__("os").cpu_count() - 1))
     dev = torch.device("cpu")
 
     X, y, _ids, _sub = load_cache(data_dir)
-    tr, va, te = stratified_split(y)
+    tr, va, te = stratified_split(y, seed=cv_cfg.get("random_state", 42))
     counts = np.bincount(y[tr], minlength=N_CLASSES)
     alpha_cw = 1.0 / np.sqrt(np.maximum(counts, 1))
     alpha_cw = alpha_cw / alpha_cw.sum() * N_CLASSES
@@ -241,19 +303,23 @@ def run_deep(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int,
     def train_once(train_idx: np.ndarray, val_idx: np.ndarray,
                    seed: int) -> tuple[ECGResNet, dict, np.ndarray]:
         rng = np.random.default_rng(seed)
-        model = ECGResNet(n_classes=N_CLASSES).to(dev)
-        opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+        model = ECGResNet(n_classes=N_CLASSES, dropout=CFG["model"].get("dropout", 0.3)).to(dev)
+        opt = torch.optim.AdamW(model.parameters(), 
+                                lr=train_cfg.get("learning_rate", 3e-4), 
+                                weight_decay=train_cfg.get("weight_decay", 1e-4))
         steps = max(1, (len(train_idx) // batch_size)) * epochs
-        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps)
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps) if train_cfg.get("cosine_annealing", True) else None
 
         if loss == "focal":
-            crit = FocalLoss(alpha=alpha_cw, gamma=2.0)
+            crit = FocalLoss(alpha=alpha_cw, gamma=train_cfg.get("focal_gamma", 2.0))
         else:
             crit = nn.CrossEntropyLoss(weight=torch.tensor(alpha_cw, dtype=torch.float32),
-                                       label_smoothing=0.05)
+                                       label_smoothing=train_cfg.get("label_smoothing", 0.05))
 
         hist = {"train_loss": [], "val_f1": []}
-        best_f1, best_state, patience, bad = 0.0, None, 8, 0
+        best_f1, best_state = 0.0, None
+        patience = train_cfg.get("early_stopping_patience", 8)
+        bad = 0
         step = 0
         for ep in range(1, epochs + 1):
             order = rng.permutation(train_idx)
@@ -268,9 +334,10 @@ def run_deep(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int,
                 opt.zero_grad(set_to_none=True)
                 lossv = crit(model(xb), yb)
                 lossv.backward()
-                nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                nn.utils.clip_grad_norm_(model.parameters(), train_cfg.get("grad_clip", 5.0))
                 opt.step()
-                sched.step()
+                if sched:
+                    sched.step()
                 tot += float(lossv)
                 nb += 1
                 step += 1
@@ -291,7 +358,11 @@ def run_deep(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int,
         if best_state is not None:
             model.load_state_dict(best_state)
         val_probs, val_y = evaluate_model(model, val_idx)
-        bias = tune_bias(val_probs, val_y)
+        cal_cfg = CFG.get("calibration", {})
+        bias = tune_bias(val_probs, val_y, 
+                         rounds=cal_cfg.get("bias_tune_rounds", 4),
+                         span=cal_cfg.get("bias_tune_span", 1.6),
+                         steps=cal_cfg.get("bias_tune_steps", 41))
         tuned_f1 = _macro_f1(val_probs, val_y, bias)
         return model, {"best_val_macro_f1": round(best_f1, 4), "tuned_val_macro_f1": round(tuned_f1, 4),
                        "bias": bias.round(3).tolist(), "history": hist}, bias
@@ -301,7 +372,7 @@ def run_deep(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int,
         all_idx = np.concatenate([tr, va])
         sum_, ssum = 0.0, 0.0
         fold_vals: list[float] = []
-        skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=42)
+        skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=cv_cfg.get("random_state", 42))
         for f, (f_tr, f_va) in enumerate(skf.split(np.zeros(len(all_idx)), y[all_idx]), 1):
             _, meta, _ = train_once(all_idx[f_tr], all_idx[f_va], seed=100 + f)
             vf = meta["tuned_val_macro_f1"]
@@ -325,11 +396,15 @@ def run_deep(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int,
     cm = confusion_matrix(test_y, pred).tolist()
     print(f"TEST macro F1 (raw)={tf1_raw:.4f} | tuned={tf1:.4f} | val_best={meta['best_val_macro_f1']:.4f}")
 
+    # Log parameter count
+    n_params = count_parameters(model)
+    print(f"Model parameters: {n_params:,} (~{n_params/1e6:.1f}M)")
+
     models_dir.mkdir(parents=True, exist_ok=True)
     torch.save({"state_dict": model.state_dict(), "classes": list(CLASS_NAMES),
                 "target_fs": TARGET_FS}, models_dir / "ecg_resnet.pt")
     (models_dir / "ecg_config.json").write_text(json.dumps(
-        {"architecture": "ECGResNet-1D", "params": count_parameters(model),
+        {"architecture": "ECGResNet-1D", "params": n_params,
          "target_fs": TARGET_FS, "input_len": TARGET_FS * 10,
          "loss": loss, "best_val_macro_f1": meta["best_val_macro_f1"],
          "bias": meta["bias"]}, indent=2))
@@ -447,6 +522,8 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
     """
     from sklearn.metrics import classification_report, f1_score
 
+    stage2_cfg = CFG.get("stage2", {})
+    
     torch.set_num_threads(max(1, __import__("os").cpu_count() - 1))
     dev = torch.device("cpu")
 
@@ -463,6 +540,10 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
     backbone.eval()
     backbone.to(dev)
 
+    min_count = stage2_cfg.get("min_subclass_count", MIN_SUBCLASS_COUNT)
+    max_subclasses = stage2_cfg.get("max_subclasses_per_super", 8)
+    patience = stage2_cfg.get("early_stopping_patience", 5)
+
     by_super: dict[str, defaultdict] = {"arrhythmia": defaultdict(list), "block": defaultdict(list)}
     for i, subs in enumerate(sub):
         s = SUPERCLASSES[int(y[i])]
@@ -475,8 +556,8 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
     sub_index: dict[str, dict[str, int]] = {}
     sub_labels: dict[str, np.ndarray] = {}
     for s, groups in by_super.items():
-        keep = [k for k, v in groups.items() if k is not None and len(v) >= MIN_SUBCLASS_COUNT]
-        keep = sorted(keep, key=lambda k: -len(groups[k]))[:8]
+        keep = [k for k, v in groups.items() if k is not None and len(v) >= min_count]
+        keep = sorted(keep, key=lambda k: -len(groups[k]))[:max_subclasses]
         classes = keep + (["other"] if keep else [])
         head_desc[s] = classes
         sub_index[s] = {c: i for i, c in enumerate(classes)}
@@ -528,7 +609,9 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
         head = nn.Linear(256, len(classes)).to(dev)
         head.weight.data.normal_(0, 0.01)
         head.bias.data.zero_()
-        opt = torch.optim.AdamW(head.parameters(), lr=3e-3, weight_decay=1e-3)
+        opt = torch.optim.AdamW(head.parameters(), 
+                                lr=stage2_cfg.get("learning_rate", 3e-3), 
+                                weight_decay=stage2_cfg.get("weight_decay", 1e-3))
         best_f1, best_state, bad = 0.0, None, 0
         for ep in range(1, epochs + 1):
             perm = torch.randperm(n_tr).numpy()
@@ -552,7 +635,7 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
                 best_f1, bad, best_state = f1, 0, {k: v.clone() for k, v in head.state_dict().items()}
             else:
                 bad += 1
-                if bad >= 5:
+                if bad >= patience:
                     print(f"  {s}: erken durdurma @ ep {ep}")
                     break
         if best_state is not None:
@@ -577,12 +660,40 @@ def main() -> None:
     ap.add_argument("--data-dir", default=str(root.parent / "data" / "ecg"))
     ap.add_argument("--out-dir", default=str(root.parent / "docs" / "metrics"))
     ap.add_argument("--models-dir", default=str(root / "models"))
-    ap.add_argument("--epochs", type=int, default=40)
-    ap.add_argument("--epochs-stage2", type=int, default=15)
-    ap.add_argument("--batch-size", type=int, default=64)
-    ap.add_argument("--loss", choices=["ce", "focal"], default="focal")
-    ap.add_argument("--folds", type=int, default=5)
+    ap.add_argument("--epochs", type=int, default=None)
+    ap.add_argument("--epochs-stage2", type=int, default=None)
+    ap.add_argument("--batch-size", type=int, default=None)
+    ap.add_argument("--loss", choices=["ce", "focal"], default=None)
+    ap.add_argument("--folds", type=int, default=None)
+    ap.add_argument("--config", type=str, default=None, help="YAML config dosyasi yolu")
     args = ap.parse_args()
+
+    # Load config if provided
+    global CFG
+    if args.config:
+        config_path = Path(args.config)
+        if not config_path.is_absolute():
+            config_path = root / config_path
+        loaded = load_config(config_path)
+        if loaded:
+            # Deep merge with defaults
+            CFG = merge_config(DEFAULT_CFG, loaded)
+            print(f"Config loaded from {config_path}")
+        else:
+            print("Warning: Config file not found or PyYAML not installed, using defaults")
+    else:
+        CFG = DEFAULT_CFG.copy()
+
+    # Override TARGET_FS from config
+    global TARGET_FS
+    TARGET_FS = CFG.get("data", {}).get("target_fs", 250)
+
+    # Etkin hiperparametreler: CLI > config > varsayilan
+    epochs = args.epochs if args.epochs is not None else CFG["training"].get("epochs", 40)
+    epochs_stage2 = args.epochs_stage2 if args.epochs_stage2 is not None else CFG["stage2"].get("epochs", 15)
+    batch_size = args.batch_size if args.batch_size is not None else CFG["training"].get("batch_size", 64)
+    loss = args.loss or CFG["training"].get("loss", "focal")
+    folds = args.folds if args.folds is not None else CFG["cv"].get("folds", 5)
 
     data_dir, out_dir, models_dir = Path(args.data_dir), Path(args.out_dir), Path(args.models_dir)
     if args.command == "build-cache":
@@ -590,11 +701,11 @@ def main() -> None:
     elif args.command == "baseline":
         run_baseline(data_dir, out_dir)
     elif args.command == "deep":
-        run_deep(data_dir, out_dir, models_dir, args.epochs, args.batch_size, args.loss, args.folds)
+        run_deep(data_dir, out_dir, models_dir, epochs, batch_size, loss, folds)
     elif args.command == "robustness":
         run_robustness(data_dir, models_dir, out_dir)
     elif args.command == "stage2":
-        run_stage2(data_dir, out_dir, models_dir, args.epochs_stage2, args.batch_size)
+        run_stage2(data_dir, out_dir, models_dir, epochs_stage2, batch_size)
 
 
 if __name__ == "__main__":
