@@ -87,6 +87,51 @@ def plot_learning_curves(history: dict, out: Path, title: str) -> None:
     print(f"  yazıldı: {out}")
 
 
+def plot_per_class_metrics(report: dict, labels: list[str], out: Path, title: str) -> None:
+    """Sınıf bazlı precision/recall/F1 çubuk grafiği (gerçek report'tan)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    classes = ["normal", "arrhythmia", "block"]
+    metrics = ("precision", "recall", "f1-score")
+    data = {m: [] for m in metrics}
+    usable = []
+    for c in classes:
+        entry = report.get(c)
+        if not isinstance(entry, dict):
+            continue
+        usable.append(c)
+        for m in metrics:
+            data[m].append(float(entry.get(m, 0.0)))
+    if not usable:
+        print(f"  atlandı (report boş): {out}")
+        return
+
+    x = np.arange(len(usable))
+    width = 0.25
+    fig, ax = plt.subplots(figsize=(6.4, 4.2))
+    colors = {"precision": "#2c4b8f", "recall": "#1f8b4c", "f1-score": "#b3541e"}
+    for i, m in enumerate(metrics):
+        bars = ax.bar(x + (i - 1) * width, data[m], width, label=m.capitalize(),
+                      color=colors[m])
+        ax.bar_label(bars, fmt="%.2f", fontsize=7, padding=1)
+    ax.set_xticks(x, [labels[classes.index(c)] if classes.index(c) < len(labels) else c
+                      for c in usable])
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("Skor")
+    ax.set_title(title)
+    ax.legend(loc="lower right", fontsize=8)
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    print(f"  yazıldı: {out}")
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     ap = argparse.ArgumentParser(description="docs/metrics JSON -> docs/figures PNG")
@@ -109,6 +154,10 @@ def main() -> None:
             plot_learning_curves(deep["history"],
                                  figures_dir / "learning_curves.png",
                                  "ECGResNet-1D — Öğrenme Eğrileri")
+        if deep.get("report"):
+            plot_per_class_metrics(deep["report"], labels,
+                                   figures_dir / "per_class_metrics.png",
+                                   "ECGResNet-1D — Sınıf Bazlı Metrikler (test)")
 
     baseline = _load(metrics_dir / "baseline_metrics.json")
     if baseline and baseline.get("confusion_matrix"):
