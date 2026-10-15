@@ -11,10 +11,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import warnings
 from pathlib import Path
 
 import torch
 import numpy as np
+
+# Legacy (TorchScript tabanli) ONNX ihracatciyi bilerek kullaniyoruz; torch 2.9+
+# bunun icin bir DeprecationWarning yayar. Ciktinin temiz kalmasi icin sustur.
+warnings.filterwarnings("ignore", category=DeprecationWarning,
+                        message=".*legacy TorchScript-based ONNX export.*")
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ai-core"))
@@ -52,7 +58,7 @@ def export_onnx(
     model: ECGResNet,
     output_path: Path,
     input_shape: tuple = (1, 12, 2500),
-    opset_version: int = 17,
+    opset_version: int = 18,
     dynamic_axes: bool = True
 ) -> None:
     """Export model to ONNX format."""
@@ -73,18 +79,36 @@ def export_onnx(
     print(f"Input shape: {input_shape}")
     print(f"Opset version: {opset_version}")
     
-    torch.onnx.export(
-        model,
-        dummy_input,
-        str(output_path),
-        export_params=True,
-        opset_version=opset_version,
-        do_constant_folding=True,
-        input_names=["input"],
-        output_names=["output"],
-        dynamic_axes=dynamic_axes_dict,
-        verbose=False
-    )
+    # dynamo=False -> stabil TorchScript tabanli ihracatci kullanilir; dinamik
+    # eksenleri guvenilir destekler ve onnxscript bagimliligi gerektirmez.
+    try:
+        torch.onnx.export(
+            model,
+            dummy_input,
+            str(output_path),
+            export_params=True,
+            opset_version=opset_version,
+            do_constant_folding=True,
+            input_names=["input"],
+            output_names=["output"],
+            dynamic_axes=dynamic_axes_dict,
+            dynamo=False,
+            verbose=False,
+        )
+    except TypeError:
+        # Eski/yeni torch surumlerinde 'dynamo' argumani olmayabilir.
+        torch.onnx.export(
+            model,
+            dummy_input,
+            str(output_path),
+            export_params=True,
+            opset_version=opset_version,
+            do_constant_folding=True,
+            input_names=["input"],
+            output_names=["output"],
+            dynamic_axes=dynamic_axes_dict,
+            verbose=False,
+        )
     
     print("ONNX export completed!")
 
@@ -117,32 +141,49 @@ def verify_onnx(model: ECGResNet, onnx_path: Path, input_shape: tuple = (1, 12, 
     print(f"  Mean absolute difference: {mean_diff:.6f}")
     
     if max_diff < 1e-4:
-        print("  ✅ ONNX model matches PyTorch model!")
+        print("  [OK] ONNX model matches PyTorch model!")
     else:
-        print(f"  ⚠️  Difference > 1e-4, check model")
+        print("  [WARN] Difference > 1e-4, check model")
 
 
 def export_torchscript(model: ECGResNet, output_path: Path, input_shape: tuple = (1, 12, 2500)) -> None:
     """Export model to TorchScript format."""
     dummy_input = torch.randn(*input_shape)
-    
+
     print(f"Exporting to TorchScript: {output_path}")
-    
-    # Trace the model
-    traced_model = torch.jit.trace(model, dummy_input)
-    traced_model.save(str(output_path))
-    
-    # Verify
-    with torch.no_grad():
-        original_out = model(dummy_input)
-        traced_out = traced_model(dummy_input)
-    
-    max_diff = (original_out - traced_out).abs().max().item()
-    print(f"  Max difference: {max_diff:.6f}")
-    if max_diff < 1e-5:
-        print("  ✅ TorchScript model matches original!")
-    else:
-        print(f"  ⚠️  Difference > 1e-5")
+
+    # Grad-CAM icin __init__'te kaydedilen backward/forward hook'lari gecici
+    # olarak kaldir; aksi halde torch.jit.trace "Modules that have backward
+    # hooks assigned can't be compiled" hatasi verir.
+    saved_hooks = {}
+    for name, module in model.named_modules():
+        for attr in ("_forward_hooks", "_forward_pre_hooks",
+                     "_backward_hooks", "_full_backward_hooks"):
+            hooks = getattr(module, attr, None)
+            if hooks:
+                saved_hooks[(name, attr)] = dict(hooks)
+                hooks.clear()
+
+    try:
+        # Trace the model
+        traced_model = torch.jit.trace(model, dummy_input)
+        traced_model.save(str(output_path))
+
+        # Verify
+        with torch.no_grad():
+            original_out = model(dummy_input)
+            traced_out = traced_model(dummy_input)
+
+        max_diff = (original_out - traced_out).abs().max().item()
+        print(f"  Max difference: {max_diff:.6f}")
+        if max_diff < 1e-5:
+            print("  [OK] TorchScript model matches original!")
+        else:
+            print("  [WARN] Difference > 1e-5")
+    finally:
+        # Hook'lari geri tak (model baska amaclarla kullanilabilir)
+        for (name, attr), hooks in saved_hooks.items():
+            getattr(model.get_submodule(name), attr).update(hooks)
 
 
 def main():
@@ -155,7 +196,7 @@ def main():
                         help="Output ONNX path")
     parser.add_argument("--torchscript-path", type=str, default=None,
                         help="Optional TorchScript output path")
-    parser.add_argument("--opset", type=int, default=17, help="ONNX opset version")
+    parser.add_argument("--opset", type=int, default=18, help="ONNX opset version")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size for export")
     parser.add_argument("--verify", action="store_true", help="Verify ONNX output matches PyTorch")
     parser.add_argument("--no-dynamic", action="store_true", help="Disable dynamic batch axis")
@@ -193,7 +234,7 @@ def main():
     if args.verify:
         verify_onnx(model, output_path, input_shape=(1, 12, 2500))
     
-    print("\n✅ Export completed successfully!")
+    print("\n[OK] Export completed successfully!")
     return 0
 
 

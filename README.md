@@ -90,19 +90,30 @@ cd frontend && npm install && npm run dev
 Eğitilmiş modeli production için ONNX veya TorchScript formatına dönüştürme:
 
 ```bash
-# ONNX export
+# Ek bağımlılıklar (ihracat için, çalışma zamanında gerekmez)
+pip install onnx onnxruntime
+
+# ONNX export (+ doğrulama)
 python scripts/export_onnx.py \
     --model-path ai-core/models/ecg_resnet.pt \
     --output-path ai-core/models/ecg_resnet.onnx \
     --verify
 
-# TorchScript export (ekstra)
+# ONNX + TorchScript export
 python scripts/export_onnx.py \
     --model-path ai-core/models/ecg_resnet.pt \
-    --torchscript-path ai-core/models/ecg_resnet.ts
+    --output-path ai-core/models/ecg_resnet.onnx \
+    --torchscript-path ai-core/models/ecg_resnet.ts \
+    --verify
+
+# Dinamik batch ekseni olmadan (sabit batch) export
+python scripts/export_onnx.py --no-dynamic
 ```
 
-ONNX modeli `onnxruntime` ile CPU/GPU'da hızlı inference için kullanılabilir.
+- ONNX modeli `onnxruntime` ile CPU/GPU'da hızlı inference için kullanılabilir.
+- `--verify` PyTorch ve ONNX/TorchScript çıktılarını karşılaştırır (maks. fark ~1e-6).
+- TorchScript ihracatı, Grad-CAM hook'larını geçici olarak kaldırır (tracing
+  kısıtı) ve işlem sonunda geri takar.
 
 ## Metrik Görselleri
 

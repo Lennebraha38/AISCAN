@@ -60,7 +60,7 @@ def test_labels_mapping():
     assert assign_superclass(["999999999"]) is None
     assert assign_superclass([]) is None
     
-    print("✓ test_labels_mapping passed")
+    print("[OK] test_labels_mapping passed")
 
 
 def test_subclasses_for():
@@ -72,7 +72,7 @@ def test_subclasses_for():
     subs = subclasses_for(["426783006"])
     assert subs == []
     
-    print("✓ test_subclasses_for passed")
+    print("[OK] test_subclasses_for passed")
 
 
 def test_preprocess_record():
@@ -92,7 +92,7 @@ def test_preprocess_record():
     assert np.allclose(means, 0, atol=1e-5), f"Means not zero: {means}"
     assert np.allclose(stds, 1, atol=1e-5), f"Stds not one: {stds}"
     
-    print("✓ test_preprocess_record passed")
+    print("[OK] test_preprocess_record passed")
 
 
 def test_resample():
@@ -106,7 +106,7 @@ def test_resample():
     assert z.shape == (12, 5000)
     assert np.allclose(x, z)
     
-    print("✓ test_resample passed")
+    print("[OK] test_resample passed")
 
 
 def test_normalize_leadwise():
@@ -116,7 +116,7 @@ def test_normalize_leadwise():
     assert np.allclose(y.mean(axis=1), 0, atol=1e-10)
     assert np.allclose(y.std(axis=1), 1, atol=1e-10)
     
-    print("✓ test_normalize_leadwise passed")
+    print("[OK] test_normalize_leadwise passed")
 
 
 def test_detect_rpeaks():
@@ -139,7 +139,7 @@ def test_detect_rpeaks():
         rr = np.diff(peaks) / fs
         assert np.all(rr > 0.4) and np.all(rr < 1.5), f"RR intervals unreasonable: {rr}"
     
-    print("✓ test_detect_rpeaks passed")
+    print("[OK] test_detect_rpeaks passed")
 
 
 def test_model_creation():
@@ -167,7 +167,7 @@ def test_model_creation():
     assert sal.shape == (2, 12, 2500), f"Saliency shape mismatch: {sal.shape}"
     assert np.all(sal >= 0) and np.all(sal <= 1), "Saliency not normalized to [0,1]"
     
-    print("✓ test_model_creation passed")
+    print("[OK] test_model_creation passed")
 
 
 def test_model_eval_mode():
@@ -183,7 +183,7 @@ def test_model_eval_mode():
     # Deterministic in eval mode
     assert torch.allclose(logits1, logits2)
     
-    print("✓ test_model_eval_mode passed")
+    print("[OK] test_model_eval_mode passed")
 
 
 if __name__ == "__main__":
@@ -196,4 +196,4 @@ if __name__ == "__main__":
     test_detect_rpeaks()
     test_model_creation()
     test_model_eval_mode()
-    print("\n✅ All ai-core smoke tests passed!")
+    print("\n[OK] All ai-core smoke tests passed!")
