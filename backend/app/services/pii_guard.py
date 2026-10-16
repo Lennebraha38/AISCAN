@@ -11,8 +11,24 @@ TC = re.compile(r"\b[1-9]\d{10}\b")
 PHONE = re.compile(r"(?:\+90|0090|0)?[\s.(]*5\d{2}[\s).-]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2}\b")
 EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 IBAN = re.compile(r"\bTR\d{2}(?:\s?\d{4}){5}\s?\d{2}\b")
+# Bağlam duyarlı doğum tarihi ("doğum tarihi 01.01.1980", "D.T.: 01/01/1980").
+DOB_CONTEXT = re.compile(
+    r"\b(?:d(?:o|ö)[gğ](?:u|ü)m\s*t(?:a)r[ii]h[iı]|d\.?t\.?)\s*[:=]?\s*"
+    r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{8})",
+    re.IGNORECASE,
+)
+# Genel tarih (gg.aa.yyyy / gg-aa-yyyy / yyyy-aa-gg). İstemci tarihleri
+# [TARIH] ile maskeler; ham tarih görülmesi sızıntı işaretidir.
+TARIH = re.compile(r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b")
 
-_PATTERNS = {"TC_KIMLIK": TC, "TELEFON": PHONE, "EPOSTA": EMAIL, "IBAN": IBAN}
+_PATTERNS = {
+    "TC_KIMLIK": TC,
+    "TELEFON": PHONE,
+    "EPOSTA": EMAIL,
+    "IBAN": IBAN,
+    "DOB": DOB_CONTEXT,
+    "TARIH": TARIH,
+}
 
 
 def scan_pii(text: str) -> list[str]:
