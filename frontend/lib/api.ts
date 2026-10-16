@@ -142,6 +142,12 @@ export const api = {
       { method: "POST", body: form },
     );
   },
+  /** Epikriz-only akış: dosya olmadan yalnızca maskelenmiş metinle analiz çalıştırır. */
+  analyzeStudyText: (studyId: string) =>
+    request<{ analysis_id: string; status: string; fusion_risk_score: number }>(
+      `/v1/studies/${studyId}/analyze`,
+      { method: "POST" },
+    ),
   getAnalysis: (id: string) =>
     request<{
       id: string;

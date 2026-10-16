@@ -94,11 +94,23 @@ export default function NewStudyPage() {
     }
   }
 
-  function onEpikrizChange(text: string) {
+  async function onEpikrizChange(text: string) {
     setEpikriz(text);
     const result = maskEpikriz(text);
     setMaskedEpikriz(result.maskedText);
     setPiiFindings(result.findings);
+    // Dosyasız (yalnız epikriz) akışta da kaydedilebilir bir anonim hash üret.
+    // Salt dosya parmak izi yerine maskelenmiş metin hash'lenir (ham PII hash'e girmez).
+    if (!file) {
+      try {
+        const salt = getOrCreateAnonSalt();
+        setAnonHash(
+          result.maskedText.trim() ? await hashAnonId(`epikriz:${result.maskedText}`, salt) : ""
+        );
+      } catch {
+        setAnonHash("");
+      }
+    }
   }
 
   async function onSubmit() {
@@ -138,6 +150,10 @@ export default function NewStudyPage() {
         const fname = isImage ? `anonymized.${imageReport.format === "png" ? "png" : "jpg"}` : "anonymized.dcm";
         const blob = new Blob([cleanedBytes as unknown as BlobPart], { type });
         const res = await api.analyzeStudy(study.id, blob, fname);
+        analysisId = res.analysis_id;
+      } else if (maskedEpikriz) {
+        // Epikriz-only akış: görüntü/sinyal yoksa da NLP analizi çalıştırılır.
+        const res = await api.analyzeStudyText(study.id);
         analysisId = res.analysis_id;
       }
       router.push(`/viewer/${study.id}${analysisId ? `?analysis=${analysisId}` : ""}`);

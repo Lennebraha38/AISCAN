@@ -21,18 +21,22 @@ test("uçtan uca: anonimleştirme → analiz → XAI → hekim onayı", async ({
   const epikriz =
     "Hasta AHMET YILMAZ, T.C. Kimlik No 10000000146. Toraks BT'de sağ alt lobda 8 mm boyutlu nodül saptandı.";
   await page.fill("textarea", epikriz);
-  await expect(page.getByText("[TC_KIMLIK]")).toBeVisible();
-  await expect(page.getByText("[KISI_ADI]")).toBeVisible();
+  // Maskelenen token'lar hem bulgu listesinde hem maskelenmiş önizlemede
+  // gorunur; strict-mode hatasindan kacinmak icin bulgu listesine odaklanilir.
+  await expect(page.locator(".anon-panel li", { hasText: "[TC_KIMLIK]" }).first()).toBeVisible();
+  await expect(page.locator(".anon-panel li", { hasText: "[KISI_ADI]" }).first()).toBeVisible();
 
   // 3) Kaydet + analiz (görüntüsüz epikriz akışı)
   await page.click("text=Anonim Çalışmayı Kaydet");
   await expect(page).toHaveURL(/viewer/);
 
   // 4) Onay ekranı: PENDING rozeti → ONAYLA → kesinleşti
-  await expect(page.getByText("HEKİM ONAYI BEKLİYOR")).toBeVisible();
+  //    (getByText case-insensitive oldugu icin rozet ile "kesinlesti" paragrafi
+  //     carismamasi icin span.badge'a odaklanilir.)
+  await expect(page.locator("span.badge", { hasText: "HEKIM ONAYI BEKLIYOR" })).toBeVisible();
   await page.fill("textarea[placeholder*='Hekim notu']", "Bulgularla uyumlu, onaylıyorum.");
   await page.click("text=ONAYLA");
-  await expect(page.getByText("RAPOR KESİNLEŞTİ")).toBeVisible();
+  await expect(page.locator("span.badge", { hasText: "RAPOR KESINLESTI" })).toBeVisible();
 });
 
 test("ham PII içeren istek sunucuda reddedilir (defans-in-depth)", async ({ request }) => {
