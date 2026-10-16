@@ -163,8 +163,7 @@ python scripts/gen_demo_ecg.py data/ecg/demo
 
 ```bash
 source .venv/bin/activate
-PYTHONPATH=anonymizer/dicom_cleaner pytest anonymizer/tests/test_dicom_cleaner.py
-PYTHONPATH=anonymizer/pii_nlp      pytest anonymizer/tests/test_pii_nlp.py
+PYTHONPATH=anonymizer/dicom_cleaner:anonymizer/pii_nlp:anonymizer/ecg_deid pytest anonymizer/tests
 PYTHONPATH=ai-core                 pytest ai-core/tests
 PYTHONPATH=backend                 pytest backend/tests
 cd frontend && npm test            # vitest birim testleri (anonimleştirme)
@@ -182,6 +181,27 @@ cd backend && python -m pytest tests/test_smoke.py -v
 
 # anonymizer (DICOM + PII + EKG .hea uçtan uca)
 cd anonymizer && python -m pytest tests/test_smoke.py -v
+```
+
+### Uçtan uca (E2E) testler — Playwright
+
+Tarayıcı akışı (`login → epikriz anonimleştirme → kaydet+analiz → hekim onayı`)
+`frontend/e2e/flow.spec.ts` içinde tanımlıdır. CI'da `.github/workflows/e2e.yml`
+iş akışı ai-core (8001) + backend (8000, sqlite) servislerini başlatır, demo
+kullanıcıları seed eder, ön yüzü derleyip Playwright (Chromium) ile testi koşar.
+
+```bash
+# Servisler ayakta (ai-core:8001, backend:8000) ve ön yüz derlenmiş olmalı:
+cd frontend
+npx playwright install chromium      # ilk seferde tarayıcı indirir
+PLAYWRIGHT_BASE_URL=http://localhost:3000 npm run test:e2e
+```
+
+Yerel hata ayıklama için sistem tarayıcısı kullanılabilir (indirme gerekmez):
+
+```bash
+cd frontend
+PLAYWRIGHT_CHANNEL=msedge npm run test:e2e
 ```
 
 ## Depo Yapısı
