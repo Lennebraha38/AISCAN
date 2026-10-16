@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 from app.ecg import train as T
 
@@ -108,3 +109,68 @@ def test_validation_split_has_no_test_leakage(synth):
     assert set(hold_tr.tolist()) | set(hold_va.tolist()) == set(train_all.tolist())
     assert len(hold_va) > 0  # en az bir doğrulama örneği
     assert set(y[hold_va].tolist()) == set(y[train_all].tolist())  # her sınıf temsil edilir
+
+
+# ---------------------------------------------------------------------------
+# Aşama 2 (fine-grained hiyerarşik kafa) duman testi
+# ---------------------------------------------------------------------------
+
+
+def _write_cache(data_dir: Path, X: np.ndarray, y: np.ndarray, sub: list) -> Path:
+    """Verilen dizilerle cache yazar (sınıf başına farklı örnek sayısı için)."""
+    cache = data_dir / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    np.save(cache / "X.npy", X)
+    np.save(cache / "y.npy", y)
+    (cache / "ids.json").write_text(json.dumps([f"TX{i:05d}" for i in range(len(y))]))
+    (cache / "subclasses.json").write_text(json.dumps(sub))
+    return data_dir
+
+
+def test_stage2_smoke(tmp_path, monkeypatch):
+    """stage2 kafası: dondurulmuş backbone havuzlama + hiyerarşik kafa eğitimi.
+
+    Aritmi sınıfına >=200 eğitim örneği ve iki alt grup (AFIB/SVT) verilir;
+    böylece hem "yetersiz veri -> atla" yolu (blok) hem de gerçek kafa eğitimi
+    (aritmi) aynı koşuda egzersiz edilir.
+    """
+    from app.ecg.model import ECGResNet
+
+    # Sınıf indeksleri: 0=normal, 1=arrhythmia, 2=block (labels.SUPERCLASSES).
+    counts = {1: 300, 2: 20, 0: 20}
+    y_list, sub = [], []
+    for cls, n in counts.items():
+        for i in range(n):
+            y_list.append(cls)
+            if cls == 1:
+                sub.append(["AFIB"] if i % 2 == 0 else ["SVT"])
+            elif cls == 2:
+                sub.append(["LBBB"] if i % 2 == 0 else ["RBBB"])
+            else:
+                sub.append([])
+    y = np.array(y_list, dtype=np.int64)
+    L2 = 500  # stage2 havuzlaması her uzunlukta çalışır; belleği küçük tutar.
+    X = np.random.default_rng(1).normal(0.0, 1.0, (len(y), 12, L2)).astype(np.float16)
+    data_dir = _write_cache(tmp_path / "ecg", X, y, sub)
+
+    # Sentetik dondurulmuş backbone checkpoint'i (stage2 yalnız state_dict okur).
+    models = tmp_path / "models"
+    models.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {"state_dict": ECGResNet(n_classes=len(T.SUPERCLASSES)).state_dict()},
+        models / "ecg_resnet.pt",
+    )
+
+    # min_subclass_count düşürülür ki sentetik alt gruplar "bilinen" sayılsın.
+    monkeypatch.setitem(T.CFG["stage2"], "min_subclass_count", 10)
+    out = tmp_path / "metrics"
+    T.run_stage2(data_dir, out, models, epochs=2, batch_size=32)
+
+    res = json.loads((out / "stage2_metrics.json").read_text())
+    heads = res["subclass_heads"]
+    assert {"AFIB", "SVT", "other"} == set(heads["arrhythmia"])
+    # Aritmi kafası yeterli veriyle eğitildi ve metrik üretti.
+    assert 0.0 <= res["arrhythmia_macro_f1"] <= 1.0
+    assert "arrhythmia_val_macro_f1" in res
+    assert res["subclass_counts"]["arrhythmia"]["AFIB"] > 0
+

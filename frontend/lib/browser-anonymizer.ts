@@ -263,11 +263,19 @@ function skipUndefinedValue(
   return buf.byteLength;
 }
 
-function readElements(buf: DataView, isExplicit: boolean, little: boolean): Element[] {
+function readElements(
+  buf: DataView,
+  isExplicit: boolean,
+  little: boolean,
+  startAt: number = 132 // 128 bayt preamble + "DICM" (ilk veri elemanı 132'de başlar)
+): Element[] {
   const elements: Element[] = [];
-  let pos = 132 + 4; // preamble + "DICM"
-  const u16 = little ? buf.getUint16.bind(buf) : ((o: number) => buf.getUint16(o, false));
-  const u32 = little ? buf.getUint32.bind(buf) : ((o: number) => buf.getUint32(o, false));
+  let pos = startAt;
+  // DataView.getUint16/32 varsayılanı BIG-endian'dir; DICOM'de ise byte order
+  // transfer syntax'ına bağlıdır. `little` burada aktarılmalı (aksi halde
+  // little-endian dosyalarda tüm etiketler yanlış okunur ve PHI temizlenmez).
+  const u16 = (o: number) => buf.getUint16(o, little);
+  const u32 = (o: number) => buf.getUint32(o, little);
 
   while (pos + 8 <= buf.byteLength) {
     const group = u16(pos);
@@ -304,11 +312,22 @@ export async function cleanDicom(
 
   // Meta grup her zaman Explicit VR LE'dir; dataset için meta içindeki
   // (0002,0010) TransferSyntaxUID okunur.
-  const metaElems = readElements(view, true, true).filter((e) => e.tag.startsWith("0002,"));
+  // Meta grubu, dosyanın başındaki ARDIŞIK 0002 elemanlarıdır. Yalnızca bu
+  // bloğu almak; implicit VR dataset'in (yanlışlıkla) explicit olarak
+  // ayrıştırılması sonucu oluşabilecek sahte 0002 etiketlerinin datasetStart'ı
+  // bozmasını önler.
+  const metaElems: Element[] = [];
+  for (const e of readElements(view, true, true)) {
+    if (!e.tag.startsWith("0002,")) break;
+    metaElems.push(e);
+  }
   let tsuid = "1.2.840.10008.1.2"; // varsayım: implicit VR LE
   for (const e of metaElems) {
     if (e.tag === "0002,0010") {
-      tsuid = new TextDecoder().decode(copy.slice(e.valueStart, e.valueEnd)).trim();
+      tsuid = new TextDecoder()
+        .decode(copy.slice(e.valueStart, e.valueEnd))
+        .replace(/\0+$/, "") // UI değeri tek bayt NULL ile doldurulur; trim bunu almaz
+        .trim();
     }
   }
   // Yalnız "Implicit VR Little Endian" implicit'tir; diğer tüm transfer
@@ -322,10 +341,13 @@ export async function cleanDicom(
   const edits: { start: number; end: number; replacement: Uint8Array }[] = [];
   const datasetStart = (() => {
     // meta grubunun bittiği yer: en büyük 0002 eleman sonu
-    return metaElems.length ? Math.max(...metaElems.map((e) => e.end)) : 132 + 4;
+    return metaElems.length ? Math.max(...metaElems.map((e) => e.end)) : 132;
   })();
 
-  const elems = readElements(view, isExplicit, little).filter((e) => e.start >= datasetStart);
+  // Meta grubu her zaman Explicit VR LE'dir; bu yüzden dataset okuması
+  // meta grubundan SONRA başlar. Aksi halde Implicit VR LE dosyalarda ayrıştırıcı
+  // meta elemanlarını implicit uzunluk olarak okuyup kayıyor.
+  const elems = readElements(view, isExplicit, little, datasetStart);
   for (const el of elems) {
     const [g, _e] = el.tag.split(",");
     const group = parseInt(g, 16);

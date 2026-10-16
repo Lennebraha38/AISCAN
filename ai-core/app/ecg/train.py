@@ -665,7 +665,7 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
                 loss = nn.functional.cross_entropy(head(Xt[bidx]), yt[bidx])
                 loss.backward()
                 opt.step()
-                total += float(loss)
+                total += float(loss.detach())
                 nb += 1
             head.eval()
             with torch.no_grad():
@@ -685,9 +685,13 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
         # Test seti SADECE burada, tek seferlik nihai degerlendirme icin kullanilir.
         with torch.no_grad():
             pred = head(Xe).argmax(1).cpu().numpy()
-        rep = classification_report(ye, pred, target_names=classes, output_dict=True)
+        rep = classification_report(ye, pred, labels=list(range(len(classes))),
+                                    target_names=classes, output_dict=True,
+                                    zero_division=0)
         stage2_result[f"{s}_val_macro_f1"] = round(best_f1, 4)
-        stage2_result[f"{s}_macro_f1"] = round(float(f1_score(ye, pred, average="macro")), 4)
+        stage2_result[f"{s}_macro_f1"] = round(float(f1_score(
+            ye, pred, labels=list(range(len(classes))), average="macro",
+            zero_division=0)), 4)
         stage2_result[f"{s}_report"] = rep
         print(f"  {s}: val_macroF1={best_f1:.4f} | alt-grup TEST macro F1 = "
               f"{stage2_result[f'{s}_macro_f1']:.4f} "
