@@ -18,6 +18,9 @@ export default defineConfig({
     baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
+    // Yerel hata ayiklamasi icin sistem tarayicisi: PLAYWRIGHT_CHANNEL=msedge
+    // (CI'da set edilmez; CI indirilmis chromium kullanir).
+    ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}),
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },

@@ -27,15 +27,15 @@ test("uçtan uca: anonimleştirme → analiz → XAI → hekim onayı", async ({
   await expect(page.locator(".anon-panel li", { hasText: "[KISI_ADI]" }).first()).toBeVisible();
 
   // 3) Kaydet + analiz (görüntüsüz epikriz akışı)
-  await page.click("text=Anonim Çalışmayı Kaydet");
+  await page.getByRole("button", { name: /Anonim Çalışmayı Kaydet/ }).click();
   await expect(page).toHaveURL(/viewer/);
 
   // 4) Onay ekranı: PENDING rozeti → ONAYLA → kesinleşti
-  //    (getByText case-insensitive oldugu icin rozet ile "kesinlesti" paragrafi
-  //     carismamasi icin span.badge'a odaklanilir.)
   await expect(page.locator("span.badge", { hasText: "HEKIM ONAYI BEKLIYOR" })).toBeVisible();
   await page.fill("textarea[placeholder*='Hekim notu']", "Bulgularla uyumlu, onaylıyorum.");
-  await page.click("text=ONAYLA");
+  // NOT: `text=ONAYLA` guvenilmez; sayfadaki SaMD bandi "onaylanmis" kelimesini
+  // icerdiginden (case-insensitive substring) once o elemani tikliyordu.
+  await page.getByRole("button", { name: "ONAYLA" }).click();
   await expect(page.locator("span.badge", { hasText: "RAPOR KESINLESTI" })).toBeVisible();
 });
 

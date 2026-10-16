@@ -18,6 +18,7 @@ postgres-data/
 *.db
 *.whl
 .DS_Store
+*.log
 
 # EKG veri kumesi (buyuk dosyalar - yeniden uretilebilir)
 data/ecg/hea/
