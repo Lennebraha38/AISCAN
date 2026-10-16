@@ -175,3 +175,128 @@ def test_similar_cases_endpoint(client, hekim):
 def test_unauthenticated_access_blocked(client):
     assert client.get("/v1/studies").status_code == 401
     assert client.get("/v1/audit/logs").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Güvenlik regresyon testleri: IDOR, token iptali, rate limit, XFF, audit kalıcılığı
+# ---------------------------------------------------------------------------
+
+
+def _admin_headers(client: TestClient) -> dict:
+    return _login(client, "admin@test.demo")
+
+
+def _create_user(client: TestClient, admin: dict, email: str, password: str, role: str):
+    r = client.post("/v1/auth/users",
+                    json={"email": email, "password": password, "role": role},
+                    headers=admin)
+    # Aynı oturumda tekrar oluşturulursa 409 dönebilir; ikisi de kabul.
+    assert r.status_code in (201, 409), r.text
+    return r
+
+
+def test_study_idor_is_enforced_by_role(client, asistan, hekim):
+    """IDOR: broad-access olmayan rol yalnız kendi çalışmasını görür; hekim tümüne erişir."""
+    admin = _admin_headers(client)
+    _create_user(client, admin, "asistan2@test.demo", "test-pass-123", "asistan")
+    asistan2 = _login(client, "asistan2@test.demo")
+
+    a_study = _create_study(client, asistan, anon_hash="c" * 64)
+    assert a_study.status_code == 201, a_study.text
+    a_id = a_study.json()["id"]
+
+    b_study = _create_study(client, asistan2, anon_hash="d" * 64)
+    assert b_study.status_code == 201, b_study.text
+    b_id = b_study.json()["id"]
+
+    # Nesne düzeyi: asistan yalnız kendi çalışmasına erişebilir.
+    assert client.get(f"/v1/studies/{b_id}", headers=asistan).status_code == 403
+    assert client.get(f"/v1/studies/{a_id}", headers=asistan2).status_code == 403
+    # broad-access rol (hekim) inceleme amacıyla erişebilir.
+    assert client.get(f"/v1/studies/{b_id}", headers=hekim).status_code == 200
+
+    # Liste düzeyi: her asistan yalnız kendi kayıtlarını görür.
+    a_ids = {s["id"] for s in client.get("/v1/studies", headers=asistan).json()}
+    b_ids = {s["id"] for s in client.get("/v1/studies", headers=asistan2).json()}
+    assert a_id in a_ids and b_id not in a_ids
+    assert b_id in b_ids and a_id not in b_ids
+
+
+def test_password_change_invalidates_old_tokens(client):
+    """token_version: şifre değişince eski access/refresh token'lar 401 olur."""
+    admin = _admin_headers(client)
+    _create_user(client, admin, "pwuser@test.demo", "test-pass-123", "hekim")
+
+    tokens = client.post("/v1/auth/login",
+                         json={"email": "pwuser@test.demo", "password": "test-pass-123"}).json()
+    old_access = {"Authorization": f"Bearer {tokens['access_token']}"}
+    old_refresh = tokens["refresh_token"]
+    assert client.get("/v1/auth/me", headers=old_access).status_code == 200
+
+    ch = client.post("/v1/auth/password",
+                     json={"current_password": "test-pass-123", "new_password": "yeni-parola-456"},
+                     headers=old_access)
+    assert ch.status_code == 200, ch.text
+
+    # Eski token'lar artık geçersiz kılınmış.
+    assert client.get("/v1/auth/me", headers=old_access).status_code == 401
+    assert client.post("/v1/auth/refresh",
+                       json={"refresh_token": old_refresh}).status_code == 401
+    # Yeni şifreyle giriş çalışır.
+    assert client.post("/v1/auth/login",
+                       json={"email": "pwuser@test.demo", "password": "yeni-parola-456"}).status_code == 200
+
+
+def test_rate_limit_raises_429_after_limit():
+    """Sabit-pencere hız sınırlayıcı limiti aşınca 429 üretir."""
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from app.core.ratelimit import rate_limit
+
+    req = SimpleNamespace(headers={}, client=SimpleNamespace(host="203.0.113.50"))
+    name = f"unit-{uuid.uuid4().hex[:8]}"
+    for _ in range(3):
+        rate_limit(req, name, 3, 60)
+    with pytest.raises(HTTPException) as ei:
+        rate_limit(req, name, 3, 60)
+    assert ei.value.status_code == 429
+
+
+def test_client_ip_ignores_xff_unless_trusted(monkeypatch):
+    """XFF yalnız TRUST_FORWARDED_FOR=1 iken dikkate alınır (audit IP spoof koruması)."""
+    import dataclasses
+    from types import SimpleNamespace
+
+    from app.core import deps
+    from app.core.config import settings
+
+    req = SimpleNamespace(headers={"x-forwarded-for": "9.9.9.9, 10.0.0.1"},
+                          client=SimpleNamespace(host="203.0.113.7"))
+
+    monkeypatch.setattr(deps, "settings", dataclasses.replace(settings, trust_forwarded_for=False))
+    assert deps.client_ip(req) == "203.0.113.7"  # spoof edilen başlık yok sayılır
+
+    monkeypatch.setattr(deps, "settings", dataclasses.replace(settings, trust_forwarded_for=True))
+    assert deps.client_ip(req) == "9.9.9.9"  # güvenilir proxy arkasında ilk adres
+
+    req2 = SimpleNamespace(headers={}, client=SimpleNamespace(host="203.0.113.8"))
+    assert deps.client_ip(req2) == "203.0.113.8"  # başlık yoksa gerçek IP
+
+
+def test_failed_login_is_committed_to_audit(client):
+    """get_db HTTPException yolunda da commit etmeli: LOGIN_FAILED kaydı kalıcı olur."""
+    client.post("/v1/auth/login", json={"email": "admin@test.demo", "password": "yanlis-sifre"})
+    admin = _admin_headers(client)
+    actions = {row["action"] for row in client.get("/v1/audit/logs", headers=admin).json()}
+    assert "LOGIN_FAILED" in actions
+
+
+def test_pii_rejection_is_committed_to_audit(client, hekim):
+    """get_db HTTPException yolunda da commit etmeli: PII_REJECTED kaydı kalıcı olur."""
+    r = _create_study(client, hekim, masked_epikriz="Kimlik 10000000146 ile başvurdu.")
+    assert r.status_code == 422
+    admin = _admin_headers(client)
+    actions = {row["action"] for row in client.get("/v1/audit/logs", headers=admin).json()}
+    assert "PII_REJECTED" in actions

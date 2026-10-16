@@ -364,7 +364,7 @@ def run_deep(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int,
                 opt.step()
                 if sched:
                     sched.step()
-                tot += float(lossv)
+                tot += float(lossv.detach())
                 nb += 1
                 step += 1
             vp, vy = evaluate_model(model, val_idx)
