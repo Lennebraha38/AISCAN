@@ -8,7 +8,7 @@ export function middleware(request: NextRequest) {
   const authed = request.cookies.has("pulsar_auth");
   const { pathname } = request.nextUrl;
 
-  const protectedPaths = ["/dashboard", "/viewer", "/approvals", "/studies"];
+  const protectedPaths = ["/dashboard", "/viewer", "/approvals", "/studies", "/present", "/admin"];
   if (!authed && protectedPaths.some((p) => pathname.startsWith(p))) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
@@ -23,5 +23,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/viewer/:path*", "/approvals/:path*", "/studies/:path*", "/login"],
+  matcher: ["/dashboard/:path*", "/viewer/:path*", "/approvals/:path*", "/studies/:path*", "/present/:path*", "/admin/:path*", "/login"],
 };

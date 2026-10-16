@@ -17,14 +17,43 @@ Strateji (k-anonimlik):
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from dataclasses import dataclass, field
 
 from pii_nlp.masker import contains_pii, mask
 
-_AGE_RE = re.compile(r"^#Age:\s*(\d+)\s*$")
-_FIELD_RE = re.compile(r"^#(Age|Sex|Dx|Rx|Hx|Sx):(.*)$")
-_FREE_TEXT_FIELDS = {"Rx", "Hx", "Sx"}
+_FIELD_RE = re.compile(r"^#\s*(Age|Sex|Dx|Rx|Hx|Sx)\s*:\s*(.*)$", re.IGNORECASE)
+_ANY_FIELD_RE = re.compile(r"^#\s*([A-Za-z][A-Za-z0-9_]*)\s*:\s*(.*)$")
+_FREE_TEXT_FIELDS = {"rx", "hx", "sx"}
+# Değeri doğrudan PHI sayılan, tanınan başlık alan adları (küçük harf).
+_PHI_FIELD_NAMES = {
+    "patientname", "patient", "patientid", "name", "id", "dob", "birthdate",
+    "birth", "birthday", "birthname", "comments", "comment", "address",
+    "hospital", "institution", "institutionname", "physician", "doctor",
+    "mrn", "lastname", "firstname", "surname", "ssn", "accession",
+    "accessionnumber", "phone", "telephone", "email", "tc", "tcno",
+    "gender",
+}
+# Alan adı bu parçalardan birini içeriyorsa PHI alanı sayılır.
+_PHI_FIELD_HINTS = (
+    "patient", "physician", "doctor", "mrn", "dob", "birthdate", "birth",
+    "ssn", "accession", "address", "institution", "hospital",
+)
+
+
+def _bilinen_phi_alani(name: str) -> bool:
+    """Alan adı bilinen bir PHI alanına benziyorsa True döner."""
+    n = name.lower()
+    return n in _PHI_FIELD_NAMES or any(h in n for h in _PHI_FIELD_HINTS)
+
+
+def _resolve_salt(salt: str | None) -> str:
+    """Salt'ı çöz: açık değer yoksa ANON_SALT ortam değişkeni; yoksa hata."""
+    resolved = salt if salt else os.getenv("ANON_SALT")
+    if not resolved:
+        raise ValueError("ANON_SALT (veya açık salt) zorunludur")
+    return resolved
 
 
 @dataclass
@@ -54,12 +83,13 @@ def _age_band(age: int) -> str:
     return f"{lo}-{lo + 9}"
 
 
-def deidentify_hea(content: str, salt: str = "pulsar-kkds") -> HeaDeidentResult:
+def deidentify_hea(content: str, salt: str | None = None) -> HeaDeidentResult:
     """WFDB .hea metnini KVKK uyumlu hale getirir."""
+    salt = _resolve_salt(salt)
     out_lines: list[str] = []
     findings: list[Finding] = []
     pseudonym: str | None = None
-    original_id: str | None = None
+    pseudonyms: dict[str, str] = {}
 
     for raw in content.splitlines():
         line = raw.rstrip("\n")
@@ -68,43 +98,68 @@ def deidentify_hea(content: str, salt: str = "pulsar-kkds") -> HeaDeidentResult:
             stripped = line.strip()
             if stripped and not stripped.startswith("#"):
                 first = stripped.split()[0]
-                m_rec = re.match(r"^([A-Za-z]{2}\d{5})(\.mat)?$", first)
+                m_rec = re.match(r"^([A-Za-z0-9][A-Za-z0-9_-]*?)(\.mat)?$", first)
                 if m_rec:
-                    if original_id is None:
-                        original_id = m_rec.group(1)
-                        new_id = _pseudonym(original_id, salt)
-                        pseudonym = new_id
+                    rec_id = m_rec.group(1)
+                    if rec_id not in pseudonyms:
+                        new_id = _pseudonym(rec_id, salt)
+                        pseudonyms[rec_id] = new_id
+                        if pseudonym is None:
+                            pseudonym = new_id
                         findings.append(
-                            Finding("record_id", "hash", f"{original_id} -> {new_id}")
+                            Finding("record_id", "hash", f"{rec_id} -> {new_id}")
                         )
-                    line = line.replace(original_id, pseudonym or "", 1)
+                    line = line.replace(rec_id, pseudonyms[rec_id], 1)
             out_lines.append(line)
             continue
 
         m = _FIELD_RE.match(line)
-        if not m:
-            out_lines.append(line)
+        if m:
+            name, value = m.group(1), m.group(2).strip()
+            key = name.lower()
+            if key == "age":
+                if value.isdigit():
+                    band = _age_band(int(value))
+                    out_lines.append(f"#Age: {band}")
+                    findings.append(Finding("Age", "band", f"{value} -> {band}"))
+                else:
+                    findings.append(Finding("Age", "remove", value))
+            elif key == "sex":
+                findings.append(Finding("Sex", "remove", value))
+            elif key in _FREE_TEXT_FIELDS:
+                if value and contains_pii(value):
+                    res = mask(value, mask_dates=True)
+                    out_lines.append(f"#{name}: {res.masked_text}")
+                    findings.append(Finding(name, "mask", f"{len(res.findings)} PII bulundu"))
+                else:
+                    out_lines.append(line)
+            else:  # Dx korunur (analiz icin sart)
+                out_lines.append(line)
             continue
 
-        name, value = m.group(1), m.group(2).strip()
-        if name == "Age":
-            am = _AGE_RE.match(f"#Age: {value}")
-            if am:
-                band = _age_band(int(am.group(1)))
-                out_lines.append(f"#Age: {band}")
-                findings.append(Finding("Age", "band", f"{value} -> {band}"))
-            else:
-                findings.append(Finding("Age", "remove", value))
-        elif name == "Sex":
-            findings.append(Finding("Sex", "remove", value))
-        elif name in _FREE_TEXT_FIELDS:
+        # Taninmayan "# Alan: deger" satirlari: PHI ise kaldir, degilse maskele.
+        am = _ANY_FIELD_RE.match(line)
+        if am:
+            name, value = am.group(1), am.group(2).strip()
+            if _bilinen_phi_alani(name):
+                findings.append(Finding(name, "remove", value))
+                continue
             if value and contains_pii(value):
-                res = mask(value)
+                res = mask(value, mask_dates=True)
                 out_lines.append(f"#{name}: {res.masked_text}")
                 findings.append(Finding(name, "mask", f"{len(res.findings)} PII bulundu"))
             else:
                 out_lines.append(line)
-        else:  # Dx ve digerleri korunur
+            continue
+
+        # Serbest "# yorum" satiri: PII tasiyorsa maskele, yoksa koru.
+        # Sinyal tanim satirlari (# ile baslamaz) korunur; aksi halde WFDB
+        # bicimi (or. taban tarih alani) bozulur.
+        if line.lstrip().startswith("#") and contains_pii(line):
+            res = mask(line, mask_dates=True)
+            out_lines.append(res.masked_text)
+            findings.append(Finding("comment", "mask", f"{len(res.findings)} PII bulundu"))
+        else:
             out_lines.append(line)
 
     result = HeaDeidentResult(

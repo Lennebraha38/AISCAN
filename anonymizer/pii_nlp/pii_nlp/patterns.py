@@ -16,6 +16,10 @@ def tc_kimlik_gecerli(num: str) -> bool:
     return sum(d[:10]) % 10 == d[10]
 
 
+# Türk plaka: "34 ABC 123", "06 BKM 412", "35 A 1234"
+PLAKA = re.compile(r"\b\d{2}\s?(?:[A-Z]|[A-Z]{2,3})\s?\d{2,4}\b")
+
+
 # (tip, derlenmiş desen, öncelik) — küçük öncelik önce uygulanır.
 PATTERNS: list[tuple[str, re.Pattern, int]] = [
     ("TC_KIMLIK",
@@ -36,9 +40,7 @@ PATTERNS: list[tuple[str, re.Pattern, int]] = [
          r"|\b0\d{3}[\s]-?\d{3}[\s.-]*\d{2}[\s.-]*\d{2}\b"
      ),
      2),
-    ("PLAKA",
-     re.compile(r"\b\d{2}\s?(?:[A-Z]|[A-Z]{2,3})\s?\d{2,4}\b"),
-     3),
+    ("PLAKA", PLAKA, 3),
 ]
 
 # Bağlam duyarlı doğum tarihi: "doğum tarihi 01.01.1980", "D.T.: 01/01/1980"

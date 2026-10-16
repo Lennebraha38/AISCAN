@@ -16,13 +16,17 @@ export function getTokens(): Tokens | null {
 
 export function setTokens(tokens: Tokens): void {
   localStorage.setItem("pulsar_tokens", JSON.stringify(tokens));
-  // Middleware'in okuyabilmesi için httpOnly olmayan işaret çerezi.
-  document.cookie = `pulsar_auth=1; path=/; max-age=86400; samesite=lax`;
+  // Middleware'in okuyabilmesi için işaret çerezi. HttpOnly sunucu tarafından
+  // set edilemediğinden JS yazar; yine de Secure + SameSite=Strict eklenir
+  // (HTTPS'te çerez yalnız şifreli kanaldan gider).
+  const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; secure" : "";
+  document.cookie = `pulsar_auth=1; path=/; max-age=86400; samesite=strict${secure}`;
 }
 
 export function clearTokens(): void {
   localStorage.removeItem("pulsar_tokens");
-  document.cookie = "pulsar_auth=; path=/; max-age=0";
+  const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; secure" : "";
+  document.cookie = `pulsar_auth=; path=/; max-age=0; samesite=strict${secure}`;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

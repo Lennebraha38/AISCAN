@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 from dataclasses import dataclass, field
 
 import pydicom
@@ -75,13 +76,26 @@ class CleanReport:
         }
 
 
+def _resolve_salt(salt: str | None) -> str:
+    """Salt'ı çöz: açık değer yoksa ANON_SALT ortam değişkeni; yoksa hata.
+
+    Kaynak koda gömülü varsayılan salt tahmin edilebilir olduğundan
+    (pseudonym yeniden kimliklendirilebilir) zorunlu kılınmıştır.
+    """
+    resolved = salt if salt else os.getenv("ANON_SALT")
+    if not resolved:
+        raise ValueError("ANON_SALT (veya açık salt) zorunludur")
+    return resolved
+
+
 def _pseudonym(value: str, salt: str) -> str:
     # 16 karakter: DICOM SH VR uzunluk sinirini (16) asmamak icin.
     return hashlib.sha256((salt + value).encode("utf-8")).hexdigest()[:16]
 
 
-def clean_dicom_dataset(ds: Dataset, salt: str = "pulsar-kkds") -> tuple[Dataset, CleanReport]:
+def clean_dicom_dataset(ds: Dataset, salt: str | None = None) -> tuple[Dataset, CleanReport]:
     """Dataset üzerindeki PHI tag'lerini yerinde temizler."""
+    salt = _resolve_salt(salt)
     report = CleanReport()
     for tag, (keyword, action) in PHI_TAGS.items():
         if tag not in ds:
@@ -118,11 +132,12 @@ def clean_dicom_dataset(ds: Dataset, salt: str = "pulsar-kkds") -> tuple[Dataset
     return ds, report
 
 
-def clean_dicom_bytes(data: bytes, salt: str = "pulsar-kkds") -> tuple[bytes, dict]:
+def clean_dicom_bytes(data: bytes, salt: str | None = None) -> tuple[bytes, dict]:
     """Ham DICOM byte stream'i anonimleştirir.
 
     Dönüş: (anonim_dicom_bytes, rapor_dict)
     """
+    salt = _resolve_salt(salt)
     ds = pydicom.dcmread(io.BytesIO(data), force=True)
     ds, report = clean_dicom_dataset(ds, salt=salt)
     buf = io.BytesIO()

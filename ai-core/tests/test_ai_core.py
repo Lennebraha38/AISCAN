@@ -88,6 +88,19 @@ def test_nlp_negation_lowers_score():
     assert tok["negated"] is True
 
 
+def test_nlp_negation_is_clause_scoped():
+    # virgül/cümle sınırı aşılmamalı: sonraki cümlecikteki 'yok' nodülü negasyonlamaz
+    r = analyze_epikriz("Akciğerde nodül mevcut, hastanın öksürüğü yok.")
+    tok = next(t for t in r["highlighted_tokens"] if "nodül" in t["text"].lower())
+    assert tok["negated"] is False
+
+
+def test_nlp_negating_normal_finding_does_not_raise_risk():
+    # normal bulgu (negatif ağırlık) negasyonla riske dönüşmemeli
+    r = analyze_epikriz("Akciğer alanları doğaldır yok.")
+    assert r["urgency_score"] == 0
+
+
 def test_nlp_clean_text():
     r = analyze_epikriz("Bilateral akciğer alanları doğaldır.")
     assert r["urgency_score"] <= 35 or r["urgency"] == "düşük"

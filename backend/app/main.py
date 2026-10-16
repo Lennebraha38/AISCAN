@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
-from .core.config import settings
+from .core.config import settings, validate_security_settings
 from .models import init_db, make_engine
 from .api.v1 import analyses, audit, auth, studies
 
@@ -38,11 +38,12 @@ engine = make_engine(settings.database_url)
 def startup() -> None:
     import logging
 
-    if settings.jwt_secret == "dev-secret-change-me":
-        # Prod ortamda JWT_SECRET env ile ZORUNLU verilmeli; aksi halde
-        # token'lar tahmin edilebilir olur. Demo'da bilinçli varsayılan.
+    # Uretim ortaminda bilinen/zayif secret ile baslatmayi REDDET.
+    validate_security_settings()
+    if settings.is_development:
         logging.getLogger("uvicorn.error").warning(
-            "JWT_SECRET ayarlanmamis! Uretimde kesinlikle ozel bir anahtar tanimlayin."
+            "PULSAR_ENV=development: zayif JWT_SECRET/ANON_SALT varsayilanlari "
+            "kabul ediliyor. Uretimde PULSAR_ENV=production + guclu secret verin."
         )
     if settings.database_url.startswith("sqlite"):
         logging.getLogger("uvicorn.error").warning(

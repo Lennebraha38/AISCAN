@@ -26,6 +26,9 @@ const LABELS: Record<string, string> = {
   EPOSTA: "[EPOSTA]",
   IBAN: "[IBAN]",
   PASAPORT: "[PASAPORT]",
+  PLAKA: "[PLAKA]",
+  TARIH: "[TARIH]",
+  ADRES: "[ADRES]",
   KISI_ADI: "[KISI_ADI]",
   KURUM: "[KURUM]",
 };
@@ -45,13 +48,27 @@ const PATTERNS: { type: string; re: RegExp }[] = [
   { type: "EPOSTA", re: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g },
   { type: "IBAN", re: /\bTR\d{2}(?:\s?\d{4}){5}\s?\d{2}\b/g },
   { type: "PASAPORT", re: /\b(?:U\+[A-Z]\d{7}|[A-Z]{1,2}\d{7,8})\b/g },
+  // Türk plaka: "34 ABC 123", "06 BKM 412", "35 A 1234"
+  { type: "PLAKA", re: /\b\d{2}\s?(?:[A-Z]|[A-Z]{2,3})\s?\d{2,4}\b/g },
+  // Bağlam duyarlı doğum tarihi: "doğum tarihi 01.01.1980", "D.T.: 01/01/1980"
+  {
+    type: "TARIH",
+    re: /(?:d(?:o|ö)[gğ](?:u|ü)m\s*t(?:a)r[ii]h[iı]|d\.?t\.?)\s*[:=]?\s*(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{8})/gi,
+  },
+  // Genel tarih (dd.mm.yyyy) — quasi-identifier
+  { type: "TARIH", re: /\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b/g },
+  // Adres: mahalle/cadde/sokak kalıpları
+  {
+    type: "ADRES",
+    re: /\b[A-ZÇĞİÖŞÜ][\wçğıöşü]*(?:\s+[A-ZÇĞİÖŞÜ]?[\wçğıöşü.]*)*\s+(?:Mah(?:allesi)?\.?|Cad(?:desi)?\.?|Sok(?:ağı)?\.?)(?:\s*,?\s*(?:No\s*:?\s*\d+[/\w]*|Kat\s*:?\s*\d+|Daire\s*:?\s*\d+))*/g,
+  },
 ];
 
 const UNVANLU_AD =
-  /((?:Prof\.?\s*Dr\.?|Do[cç]\.\s*Dr\.?|Op\.\s*Dr\.?|Uz(?:m)?\.\s*Dr\.?|Dr\.?|[Dd]oktor|Hasta)\s+[A-ZÇĞİÖŞÜ][a-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜ][a-zçğıöşü]+){1,2})/g;
+  /((?:Prof\.?\s*Dr\.?|Do[cç]\.\s*Dr\.?|Op\.\s*Dr\.?|Uz(?:m)?\.\s*Dr\.?|Dr\.?|[Dd]oktor|Hasta|Sn\.?)\s+[A-ZÇĞİÖŞÜ][a-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜ][a-zçğıöşü]+){1,2})/g;
 const BUYUK_AD = /\b([A-ZÇĞİÖŞÜ]{2,}(?:\s+[A-ZÇĞİÖŞÜ]{2,}){1,2})\b/g;
 const KURUM_RE =
-  /([A-ZÇĞİÖŞÜ][\wçğıöşü.]*(?:\s+(?:ve|ile|[A-ZÇĞİÖŞÜ][\wçğıöşü]*))*\s+(?:Devlet\s+)?Hastanes[iı]|Hacettepe\s+Üniversitesi\s+Tıp\s+Fakültesi)/g;
+  /\b[A-ZÇĞİÖŞÜ][\wçğıöşüÇĞİÖŞÜ.]*(?:\s+(?:ve|ile|[A-ZÇĞİÖŞÜ][\wçğıöşü]*))*\s+(?:Devlet\s+)?(?:Hastanesi|Hastane[sıi]|Medikal\s*Merkez|Tıp\s*Merkezi|Poliklini[iğ]|Göz\s*Hastalıkları\s*Merkezi)\b|\b[A-ZÇĞİÖŞÜ][\wçğıöşü]*\s+Üniversitesi\s+Tıp\s+Fakültesi(?:\s+Hastanesi)?\b/g;
 
 export function maskEpikriz(text: string): MaskResult {
   const raw: { start: number; end: number; type: string }[] = [];
@@ -138,6 +155,32 @@ export async function hashAnonId(value: string, salt: string): Promise<string> {
   return (await sha256Hex(salt + value)).slice(0, 32);
 }
 
+const ANON_SALT_KEY = "pulsar_anon_salt";
+
+/**
+ * Anonimleştirme tuzu.
+ *
+ * Koda GÖMÜLÜ sabit bir tuz (ör. "pulsar-kkds-salt") pakete girer ve
+ * saldırganın TC kimlik gibi düşük entropili değerler için önceden hash
+ * tablosu üretmesini (re-identification) mümkün kılar. Bunun yerine tuz
+ * tarayıcıda rastgele üretilip saklanır; paketten okunamaz.
+ */
+export function getOrCreateAnonSalt(): string {
+  if (typeof window === "undefined") {
+    throw new Error("Anonimleştirme tuzu yalnızca tarayıcıda üretilebilir");
+  }
+  let salt = window.localStorage.getItem(ANON_SALT_KEY);
+  if (!salt) {
+    const rand = new Uint8Array(32);
+    crypto.getRandomValues(rand);
+    salt = Array.from(rand)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    window.localStorage.setItem(ANON_SALT_KEY, salt);
+  }
+  return salt;
+}
+
 interface Element {
   tag: string; // "GGGG,EEEE"
   start: number; // bayt aralığı (başlık dahil)
@@ -145,6 +188,79 @@ interface Element {
   vr: string | null;
   valueStart: number;
   valueEnd: number;
+}
+
+function elementHeader(
+  buf: DataView,
+  pos: number,
+  isExplicit: boolean,
+  u16: (o: number) => number,
+  u32: (o: number) => number
+): { vr: string | null; len: number; headerLen: number } {
+  let vr: string | null = null;
+  let len = 0;
+  let headerLen = 8;
+  if (isExplicit) {
+    vr = String.fromCharCode(u16(pos + 4) & 0xff, (u16(pos + 4) >> 8) & 0xff);
+    if (["OB", "OD", "OF", "OL", "OV", "OW", "SQ", "UC", "UR", "UT", "UN"].includes(vr)) {
+      len = u32(pos + 8);
+      headerLen = 12;
+    } else {
+      len = u16(pos + 6);
+    }
+  } else {
+    len = u32(pos + 4);
+  }
+  return { vr, len, headerLen };
+}
+
+/**
+ * Tanımsız uzunluklu (0xFFFFFFFF) bir değerin sonunu bulur: item
+ * (FFFE,E000) ve sequence sınırlayıcılarını iç içe sayarak eşleşen
+ * Sequence/Item Delimitation Item'dan SONRAKİ konumu döndürür. Böylece
+ * ilk sequence'te DURMAK yerine üst düzeydeki tüm PHI etiketleri taranır.
+ */
+function skipUndefinedValue(
+  buf: DataView,
+  pos: number,
+  isExplicit: boolean,
+  u16: (o: number) => number,
+  u32: (o: number) => number
+): number {
+  let depth = 0;
+  while (pos + 8 <= buf.byteLength) {
+    const group = u16(pos);
+    const elem = u16(pos + 2);
+    if (group === 0xfffe) {
+      const len = u32(pos + 4);
+      if ((elem === 0xe00d || elem === 0xe0dd) && len === 0) {
+        if (depth === 0) return pos + 8; // kapsayıcıyı kapatan sınırlayıcı
+        depth--;
+        pos += 8;
+        continue;
+      }
+      if (elem === 0xe000 && len === 0xffffffff) {
+        depth++;
+        pos += 8;
+        continue;
+      }
+      if (elem === 0xe000) {
+        pos += 8 + len;
+        continue;
+      }
+      pos += 8;
+      continue;
+    }
+    const hdr = elementHeader(buf, pos, isExplicit, u16, u32);
+    const valueStart = pos + hdr.headerLen;
+    if (hdr.len === 0xffffffff) {
+      depth++;
+      pos = valueStart;
+      continue;
+    }
+    pos = valueStart + hdr.len;
+  }
+  return buf.byteLength;
 }
 
 function readElements(buf: DataView, isExplicit: boolean, little: boolean): Element[] {
@@ -157,27 +273,19 @@ function readElements(buf: DataView, isExplicit: boolean, little: boolean): Elem
     const group = u16(pos);
     const elem = u16(pos + 2);
     const tag = `${group.toString(16).padStart(4, "0")},${elem.toString(16).padStart(4, "0")}`;
-    let vr: string | null = null;
-    let len = 0;
-    let headerLen = 8;
-
-    if (isExplicit) {
-      vr = String.fromCharCode(u16(pos + 4) & 0xff, (u16(pos + 4) >> 8) & 0xff);
-      if (["OB", "OD", "OF", "OL", "OV", "OW", "SQ", "UC", "UR", "UT", "UN"].includes(vr)) {
-        len = u32(pos + 8);
-        headerLen = 12;
-      } else {
-        len = u16(pos + 6);
-      }
-    } else {
-      len = u32(pos + 4);
-    }
+    const { vr, len, headerLen } = elementHeader(buf, pos, isExplicit, u16, u32);
 
     const start = pos;
     const valueStart = pos + headerLen;
-    const valueEnd = len === 0xffffffff ? valueStart : Math.min(valueStart + len, buf.byteLength);
-    elements.push({ tag, start, end: len === 0xffffffff ? valueStart : valueEnd, vr, valueStart, valueEnd });
-    if (len === 0xffffffff) break; // tanımsız uzunluk: üstü veriye dokunma
+    let valueEnd: number;
+    if (len === 0xffffffff) {
+      // Tanımsız uzunluk (SQ/UN): sınırlayıcıya kadar tara ve İLERLE.
+      valueEnd = skipUndefinedValue(buf, valueStart, isExplicit, u16, u32);
+    } else {
+      valueEnd = Math.min(valueStart + len, buf.byteLength);
+    }
+    elements.push({ tag, start, end: valueEnd, vr, valueStart, valueEnd });
+    if (valueEnd <= start) break; // ilerleme yoksa sonsuz döngüyü önle
     pos = valueEnd;
   }
   return elements;
@@ -203,7 +311,12 @@ export async function cleanDicom(
       tsuid = new TextDecoder().decode(copy.slice(e.valueStart, e.valueEnd)).trim();
     }
   }
-  const isExplicit = tsuid.includes("30e"); // ...1.2.1 explicit LE
+  // Yalnız "Implicit VR Little Endian" implicit'tir; diğer tüm transfer
+  // syntax'ları (Explicit VR LE/BE, sıkıştırılmış, deflate) explicit VR
+  // kullanır. Önceki `tsuid.includes("30e")` kontrolü her zaman false
+  // dönüyordu ve explicit dosyalarda ayrıştırıcı baştan kayıyordu.
+  const isExplicit = tsuid !== "1.2.840.10008.1.2";
+  const little = tsuid !== "1.2.840.10008.1.2.2"; // Explicit VR Big Endian
 
   const report: DicomCleanReport = { removed: [], hashed: [], privateTagsRemoved: 0 };
   const edits: { start: number; end: number; replacement: Uint8Array }[] = [];
@@ -212,7 +325,7 @@ export async function cleanDicom(
     return metaElems.length ? Math.max(...metaElems.map((e) => e.end)) : 132 + 4;
   })();
 
-  const elems = readElements(view, isExplicit, true).filter((e) => e.start >= datasetStart);
+  const elems = readElements(view, isExplicit, little).filter((e) => e.start >= datasetStart);
   for (const el of elems) {
     const [g, _e] = el.tag.split(",");
     const group = parseInt(g, 16);
@@ -290,46 +403,91 @@ export async function cleanHea(content: string, salt: string): Promise<{ text: s
     sexRemoved: false,
     maskedFields: [],
   };
-  let originalId: string | null = null;
   let pseudo: string | null = null;
+  const pseudonyms = new Map<string, string>();
   const out: string[] = [];
+
+  // Bilinen PHI alan adları (küçük harf) — değeri doğrudan kimlik taşır.
+  const PHI_FIELD_NAMES = new Set([
+    "patientname", "patient", "patientid", "name", "id", "dob", "birthdate",
+    "birth", "birthday", "birthname", "comments", "comment", "address",
+    "hospital", "institution", "institutionname", "physician", "doctor",
+    "mrn", "lastname", "firstname", "surname", "ssn", "accession",
+    "accessionnumber", "phone", "telephone", "email", "tc", "tcno", "gender",
+  ]);
+  const PHI_FIELD_HINTS = [
+    "patient", "physician", "doctor", "mrn", "dob", "birthdate", "birth",
+    "ssn", "accession", "address", "institution", "hospital",
+  ];
+  const isPhiField = (n: string): boolean => {
+    const l = n.toLowerCase();
+    return PHI_FIELD_NAMES.has(l) || PHI_FIELD_HINTS.some((h) => l.includes(h));
+  };
 
   for (const line of lines) {
     if (!line.startsWith("#")) {
-      // teknik satir: kayit adi / .mat referansi pseudonymize edilir
-      const m = line.match(/^([A-Za-z]{2}\d{5})(\.mat)?\b/);
+      // teknik satir: kayit adi / .mat referansi pseudonymize edilir.
+      // Alan adi eslesmesi buyuk/kucuk harf duyarsiz ve genisletilmistir.
+      const first = line.trim().split(/\s+/)[0] ?? "";
+      const m = first.match(/^([A-Za-z0-9][A-Za-z0-9_-]*?)(\.mat)?$/);
       if (m) {
-        if (!originalId) {
-          originalId = m[1];
-          pseudo = (await sha256Hex(salt + originalId)).slice(0, 16);
-          report.recordPseudonym = pseudo;
+        const recId = m[1];
+        let ps = pseudonyms.get(recId);
+        if (!ps) {
+          ps = (await sha256Hex(salt + recId)).slice(0, 16);
+          pseudonyms.set(recId, ps);
+          if (!pseudo) {
+            pseudo = ps;
+            report.recordPseudonym = ps;
+          }
         }
-        out.push(line.replace(originalId, pseudo as string));
+        out.push(line.replace(recId, ps));
       } else {
         out.push(line);
       }
       continue;
     }
-    const fm = line.match(/^#(Age|Sex|Dx|Rx|Hx|Sx):\s*(.*)$/);
-    if (!fm) {
-      out.push(line);
+
+    const fm = line.match(/^#\s*(Age|Sex|Dx|Rx|Hx|Sx)\s*:\s*(.*)$/i);
+    if (fm) {
+      const name = fm[1];
+      const key = name.toLowerCase();
+      const value = fm[2].trim();
+      if (key === "age") {
+        const age = parseInt(value, 10);
+        if (!Number.isNaN(age)) {
+          report.ageBanded = `${value} -> ${ageBand(age)}`;
+          out.push(`#${name}: ${ageBand(age)}`);
+        } else {
+          out.push("");
+        }
+      } else if (key === "sex") {
+        report.sexRemoved = true;
+        out.push("");
+      } else if (key === "rx" || key === "hx" || key === "sx") {
+        // serbest metin: temel maskeleme uygula
+        const res = maskEpikriz(value);
+        if (res.findings.length) {
+          report.maskedFields.push(`${name} (${res.findings.length} PII)`);
+          out.push(`#${name}: ${res.maskedText}`);
+        } else {
+          out.push(line);
+        }
+      } else {
+        out.push(line); // Dx korunur
+      }
       continue;
     }
-    const name = fm[1];
-    const value = fm[2];
-    if (name === "Age") {
-      const age = parseInt(value, 10);
-      if (!Number.isNaN(age)) {
-        report.ageBanded = `${age} -> ${ageBand(age)}`;
-        out.push(`#Age: ${ageBand(age)}`);
-      } else {
-        out.push("");
-      } 
-    } else if (name === "Sex") {
-      report.sexRemoved = true;
-      out.push("");
-    } else if (name === "Rx" || name === "Hx" || name === "Sx") {
-      // serbest metin: temel maskeleme uygula
+
+    // Taninmayan "# Alan: deger" satirlari: PHI ise kaldir, degilse maskele.
+    const am = line.match(/^#\s*([A-Za-z][A-Za-z0-9_]*)\s*:\s*(.*)$/);
+    if (am) {
+      const name = am[1];
+      const value = am[2].trim();
+      if (isPhiField(name)) {
+        report.maskedFields.push(`${name} (kaldirildi)`);
+        continue;
+      }
       const res = maskEpikriz(value);
       if (res.findings.length) {
         report.maskedFields.push(`${name} (${res.findings.length} PII)`);
@@ -337,8 +495,16 @@ export async function cleanHea(content: string, salt: string): Promise<{ text: s
       } else {
         out.push(line);
       }
+      continue;
+    }
+
+    // Serbest "#" yorum satiri: PII tasiyorsa maskele, yoksa koru.
+    const cres = maskEpikriz(line);
+    if (cres.findings.length) {
+      report.maskedFields.push(`# yorum (${cres.findings.length} PII)`);
+      out.push(cres.maskedText);
     } else {
-      out.push(line); // Dx korunur
+      out.push(line);
     }
   }
   return { text: out.join("\n") + "\n", report };

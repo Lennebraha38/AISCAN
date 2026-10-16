@@ -8,8 +8,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
-from ...core.deps import client_ip, get_current_user, get_db
+from ...core.deps import (BROAD_ACCESS_ROLES, can_access_study, client_ip,
+                          get_current_user, get_db)
 from ...models import Analysis, Study, User
 from ...schemas import StudyCreate, StudyOut
 from ...services.ai_client import AICoreError, call_ecg_analyze, call_fusion, call_nlp_analyze, call_vision_analyze
@@ -18,6 +20,7 @@ from ...services.embeddings import store_embedding
 from ...services.pii_guard import scan_pii
 
 MAX_ECG_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 router = APIRouter(prefix="/v1/studies", tags=["studies"])
 
@@ -80,7 +83,11 @@ def create_study(payload: StudyCreate,
 @router.get("")
 def list_studies(user: User = Depends(get_current_user),
                  db: Session = Depends(get_db)) -> list[dict]:
-    studies = db.query(Study).order_by(Study.created_at.desc()).limit(100).all()
+    q = db.query(Study).order_by(Study.created_at.desc())
+    # IDOR: asistan yalnız kendi oluşturduğu çalışmaları listeler.
+    if user.role not in BROAD_ACCESS_ROLES:
+        q = q.filter(Study.created_by_id == user.id)
+    studies = q.limit(100).all()
     return [_study_out(s).model_dump() for s in studies]
 
 
@@ -94,14 +101,15 @@ async def analyze_study(study_id: str,
     study = db.get(Study, study_id)
     if not study:
         raise HTTPException(404, "Çalışma bulunamadı")
+    if not can_access_study(user, study):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Bu çalışmaya erişim yetkiniz yok")
 
-    # Analiz basladi bildirimi
+    # Analiz basladi bildirimi (KVKK: kullanici e-postasi YAYINLANMAZ)
     try:
         import asyncio as _aio
         _aio.get_event_loop().create_task(_broadcast({
             "type": "analysis_started",
             "study_id": study.id,
-            "user": user.email,
         }))
     except Exception:
         pass
@@ -109,25 +117,37 @@ async def analyze_study(study_id: str,
     vision_result = nlp_result = ecg_result = fusion_result = None
     try:
         if image is not None and image.filename:
+            # Boyut sınırı OKUMADAN ÖNCE kontrol edilir (bellek koruması).
+            if image.size is not None and image.size > MAX_IMAGE_BYTES:
+                raise HTTPException(413, "Görüntü dosyası 10MB sınırını aşıyor")
             data = await image.read()
+            if len(data) > MAX_IMAGE_BYTES:
+                raise HTTPException(413, "Görüntü dosyası 10MB sınırını aşıyor")
             if data:
                 content_type = image.content_type or "application/octet-stream"
-                vision_result = call_vision_analyze(data, image.filename, content_type,
-                                                    study.modality)
+                # Bloklayan senkron httpx cagrisi event loop'u kilitlemesin:
+                # ayri thread'de calistirilir.
+                vision_result = await run_in_threadpool(
+                    call_vision_analyze, data, image.filename, content_type,
+                    study.modality)
         if signal_file is not None and signal_file.filename:
+            if signal_file.size is not None and signal_file.size > MAX_ECG_BYTES:
+                raise HTTPException(413, "EKG dosyası 5MB sınırını aşıyor")
             data = await signal_file.read()
             if data:
                 if len(data) > MAX_ECG_BYTES:
                     raise HTTPException(413, "EKG dosyası 5MB sınırını aşıyor")
                 if study.modality != "ECG":
                     raise HTTPException(422, "Bu çalışma EKG modality ile oluşturulmamış")
-                ecg_result = call_ecg_analyze(base64.b64encode(data).decode("ascii"))
+                ecg_result = await run_in_threadpool(
+                    call_ecg_analyze, base64.b64encode(data).decode("ascii"))
                 fname = _store_ecg_file(data)
                 ecg_result["_file"] = fname  # viewer sinyal erisim anahtari
         if study.masked_epikriz:
-            nlp_result = call_nlp_analyze(study.masked_epikriz)
+            nlp_result = await run_in_threadpool(call_nlp_analyze, study.masked_epikriz)
         if vision_result or nlp_result or ecg_result:
-            fusion_result = call_fusion(
+            fusion_result = await run_in_threadpool(
+                call_fusion,
                 vision_risk=_ecg_or_vision_risk(vision_result, ecg_result),
                 nlp_score=(nlp_result or {}).get("urgency_score", 0),
                 top_findings=_top_labels(vision_result, ecg_result),
@@ -161,7 +181,6 @@ async def analyze_study(study_id: str,
             "analysis_id": analysis.id,
             "study_id": study.id,
             "fusion_risk_score": analysis.fusion_risk_score,
-            "user": user.email,
         }))
     except Exception:
         pass
@@ -216,6 +235,8 @@ def get_study(study_id: str, user: User = Depends(get_current_user),
     study = db.get(Study, study_id)
     if not study:
         raise HTTPException(404, "Çalışma bulunamadı")
+    if not can_access_study(user, study):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Bu çalışmaya erişim yetkiniz yok")
     out = _study_out(study).model_dump()
     out["analyses"] = [
         {"id": a.id, "status": a.status, "fusion_risk_score": a.fusion_risk_score}

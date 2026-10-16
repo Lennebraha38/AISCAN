@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import os
 
 import pydicom
 import pytest
@@ -9,6 +10,8 @@ from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
 from pydicom.uid import ExplicitVRLittleEndian, generate_uid
 
 from dicom_cleaner import clean_dicom_bytes, scan_for_phi
+
+os.environ.setdefault("ANON_SALT", "test-anon-salt")
 
 
 def _make_dicom() -> bytes:

@@ -21,6 +21,8 @@ TARGET_SAMPLES = 5000  # 10 saniye
 
 
 def resample_to(x: np.ndarray, fs_in: int, fs_out: int = TARGET_FS) -> np.ndarray:
+    if fs_in <= 0 or fs_out <= 0:
+        raise ValueError(f"gecersiz ornekleme frekansi: fs_in={fs_in}, fs_out={fs_out} (>0 olmali)")
     if fs_in == fs_out:
         return x.astype(np.float64)
     n_out = int(round(x.shape[-1] * fs_out / fs_in))

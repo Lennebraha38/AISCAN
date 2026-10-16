@@ -6,10 +6,11 @@ sizdirir. KVKK acisindan kisisel veri icermez.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from ...core.deps import get_db
+from ...core.ratelimit import rate_limit
 from ...models import Analysis
 from ...services.report_pdf import verification_code
 
@@ -17,7 +18,10 @@ router = APIRouter(prefix="/v1/verify", tags=["system"])
 
 
 @router.get("/{code}")
-def verify(code: str, db: Session = Depends(get_db)) -> dict:
+def verify(code: str, request: Request, db: Session = Depends(get_db)) -> dict:
+    # Kimlik gerektirmeyen uç: tüm tabloyu tarayabildiği için hız sınırlanır
+    # (kaynak tüketimi / numaralandırma saldırısını azaltır).
+    rate_limit(request, "verify", 60, 60)
     code = (code or "").strip().upper().removeprefix("PULSAR-KKDS:")
     if len(code) != 16:
         return {"valid": False, "reason": "kod biçimi hatalı"}

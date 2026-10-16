@@ -27,12 +27,15 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(candidate.hex(), digest)
 
 
-def _create_token(subject: str, role: str, expires_delta: timedelta, token_type: str) -> str:
+def _create_token(subject: str, role: str, expires_delta: timedelta, token_type: str,
+                  token_version: int = 0) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": subject,
         "role": role,
         "type": token_type,
+        # Şifre değişince eski token'ları geçersiz kılmak için sürüm.
+        "tv": token_version,
         "iat": int(now.timestamp()),
         "exp": int((now + expires_delta).timestamp()),
         "jti": secrets.token_hex(8),
@@ -40,12 +43,14 @@ def _create_token(subject: str, role: str, expires_delta: timedelta, token_type:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def create_access_token(user_id: str, role: str) -> str:
-    return _create_token(user_id, role, timedelta(minutes=settings.access_token_minutes), "access")
+def create_access_token(user_id: str, role: str, token_version: int = 0) -> str:
+    return _create_token(user_id, role, timedelta(minutes=settings.access_token_minutes),
+                         "access", token_version)
 
 
-def create_refresh_token(user_id: str, role: str) -> str:
-    return _create_token(user_id, role, timedelta(days=settings.refresh_token_days), "refresh")
+def create_refresh_token(user_id: str, role: str, token_version: int = 0) -> str:
+    return _create_token(user_id, role, timedelta(days=settings.refresh_token_days),
+                         "refresh", token_version)
 
 
 def decode_token(token: str) -> dict | None:

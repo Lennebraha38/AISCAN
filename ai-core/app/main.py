@@ -29,6 +29,10 @@ from .ecg.inference import get_analyzer
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_MIME = {"image/jpeg", "image/png", "application/dicom", "application/octet-stream"}
 
+# EKG girdi dogrulama sinirlari (fs=0 -> resample_poly cokmesi yerine 422).
+ECG_MIN_FS = 1
+ECG_MAX_FS = 10000
+
 app = FastAPI(title="Pulsar-KKDS AI Core", version="0.2.0")
 
 # Lazy singleton model yuvası (torch checkpoint varsa doldurulur).
@@ -45,6 +49,30 @@ def health() -> HealthResponse:
         xai_backend="grad-cam" if _MODEL_HOLDER["model"] or get_analyzer().model is not None
         else "energy-saliency",
     )
+
+
+def _validate_ecg_input(signal: np.ndarray, fs: float) -> None:
+    """Örnekleme frekansı ve sinyal şeklini sınırda doğrular.
+
+    Geçersiz girdide (örn. fs=0, boş/yanlış şekilli sinyal) HTTP 422 döner;
+    böylece hata scipy/resample_poly içine ulaşmadan yakalanır.
+    """
+    try:
+        fs_val = float(fs)
+    except (TypeError, ValueError):
+        raise HTTPException(422, f"geçersiz örnekleme frekansı: fs={fs!r}") from None
+    if not np.isfinite(fs_val) or fs_val < ECG_MIN_FS or fs_val > ECG_MAX_FS:
+        raise HTTPException(
+            422,
+            f"geçersiz örnekleme frekansı (fs={fs_val:g}); "
+            f"{ECG_MIN_FS}..{ECG_MAX_FS} Hz aralığında olmalı",
+        )
+    if signal.ndim != 2 or signal.shape[0] != 12 or signal.shape[1] == 0:
+        raise HTTPException(
+            422, "12 derivasyonlu, boş olmayan sinyal matrisi bekleniyor (12xN, N>0)"
+        )
+    if not np.all(np.isfinite(signal)):
+        raise HTTPException(422, "sinyal NaN/sonsuz değer içeriyor")
 
 
 @app.post("/v1/ecg/analyze", response_model=EcgAnalyzeResponse, tags=["ecg"])
@@ -72,6 +100,9 @@ async def ecg_analyze(payload: EcgAnalyzeRequest) -> EcgAnalyzeResponse:
         fs = int(payload.fs)
     else:
         raise HTTPException(400, "'mat_b64' veya 'signal' alanlarindan biri zorunlu")
+
+    # Sinir kontrolu: fs ve sinyal sekli gecersizse 422 (500 yerine).
+    _validate_ecg_input(signal, fs)
 
     result = analyzer.analyze_signal(signal, fs)
     return EcgAnalyzeResponse(

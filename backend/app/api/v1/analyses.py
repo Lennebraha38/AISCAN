@@ -7,7 +7,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
-from ...core.deps import DECISION_ROLES, client_ip, get_current_user, get_db
+from ...core.deps import (BROAD_ACCESS_ROLES, DECISION_ROLES, can_access_study,
+                          client_ip, get_current_user, get_db)
 from ...models import Analysis, ReviewDecision, Study, User
 from ...schemas import AnalysisOut, DecisionOut, DecisionRequest
 from ...services.audit import write_audit
@@ -16,6 +17,17 @@ from ...services.report_pdf import render_report
 from ...services.patient_report import patient_report
 
 router = APIRouter(prefix="/v1/analyses", tags=["analyses"])
+
+
+def _load_analysis_for_user(db: Session, user: User, analysis_id: str) -> Analysis:
+    """Analizi yükler ve nesne düzeyi yetkiyi doğrular (IDOR koruması)."""
+    analysis = db.get(Analysis, analysis_id)
+    if not analysis:
+        raise HTTPException(404, "Analiz bulunamadı")
+    study = db.get(Study, analysis.study_id)
+    if not can_access_study(user, study):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Bu analize erişim yetkiniz yok")
+    return analysis
 
 # Bildirimleri broadcast et (hata olursa sessizce gec)
 async def _broadcast(event: dict) -> None:
@@ -94,6 +106,10 @@ def list_analyses(status_filter: str | None = None,
     dökülmez; aksi halde her satır MB'larca base64 taşır.
     Panelde okunabilirlik için modalite ve baskın bulgu etiketi eklenir."""
     q = db.query(Analysis).order_by(Analysis.created_at.desc())
+    # IDOR: asistan yalnız kendi çalışmalarına ait analizleri listeler.
+    if user.role not in BROAD_ACCESS_ROLES:
+        q = q.join(Study, Analysis.study_id == Study.id).filter(
+            Study.created_by_id == user.id)
     if status_filter:
         q = q.filter(Analysis.status == status_filter)
     studies = {s.id: s for s in db.query(Study).all()}
@@ -125,9 +141,7 @@ def list_analyses(status_filter: str | None = None,
 def get_analysis(analysis_id: str,
                  user: User = Depends(get_current_user),
                  db: Session = Depends(get_db)) -> dict:
-    analysis = db.get(Analysis, analysis_id)
-    if not analysis:
-        raise HTTPException(404, "Analiz bulunamadı")
+    analysis = _load_analysis_for_user(db, user, analysis_id)
     out = _analysis_out(analysis).model_dump()
     out["decisions"] = [
         {
@@ -149,12 +163,10 @@ def report_pdf(analysis_id: str,
 
     Rapor; doğrulama kodu, bulgular, fuzyon riski ve hekim kararını içerir.
     """
-    if user.role not in DECISION_ROLES:
+    if user.role not in (*DECISION_ROLES, "admin"):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "Rapor indirme yetkisi hekim/radyolog/admin'e aittir")
-    analysis = db.get(Analysis, analysis_id)
-    if not analysis:
-        raise HTTPException(404, "Analiz bulunamadı")
+    analysis = _load_analysis_for_user(db, user, analysis_id)
     if analysis.status not in ("APPROVED", "REJECTED"):
         raise HTTPException(409, "Analiz henüz kesinleşmedi (hekim kararı bekleniyor)")
     study = db.get(Study, analysis.study_id)
@@ -191,9 +203,7 @@ def get_cam(analysis_id: str,
     ?finding=<label>  → o bulgunun kendi ısı haritası (yoksa ilk mevcut)
     ?clean=true       → bindirmesiz temel görüntü
     """
-    analysis = db.get(Analysis, analysis_id)
-    if not analysis:
-        raise HTTPException(404, "Analiz bulunamadı")
+    analysis = _load_analysis_for_user(db, user, analysis_id)
     if not analysis.vision_result:
         # EKG vb. görüntüsüz analiz: ön yüz boş görselle sessizce geçer.
         return {"label": None, "cam_image_b64": "", "empty": True}
@@ -247,11 +257,23 @@ def decide(analysis_id: str,
             status.HTTP_403_FORBIDDEN,
             "Nihai karar yalnız hekim veya radyolog tarafından verilebilir",
         )
-    analysis = db.get(Analysis, analysis_id)
-    if not analysis:
-        raise HTTPException(404, "Analiz bulunamadı")
+    analysis = _load_analysis_for_user(db, user, analysis_id)
     if analysis.status != "PENDING_REVIEW":
         raise HTTPException(409, f"Analiz zaten kesinleşmiş: {analysis.status}")
+
+    # Yarış koruması: koşullu UPDATE ile yalnızca hâlâ PENDING_REVIEW olan
+    # satır kesinleştirilir; iki hekim aynı anda karar verirse biri 409 alır.
+    now = datetime.now(timezone.utc)
+    updated = (
+        db.query(Analysis)
+        .filter(Analysis.id == analysis_id, Analysis.status == "PENDING_REVIEW")
+        .update({"status": payload.decision, "decided_at": now},
+                synchronize_session=False)
+    )
+    if not updated:
+        db.rollback()
+        raise HTTPException(409, "Analiz başka bir hekim tarafından kesinleştirildi")
+    db.refresh(analysis)
 
     decision = ReviewDecision(
         analysis_id=analysis.id,
@@ -259,8 +281,6 @@ def decide(analysis_id: str,
         decision=payload.decision,
         note=payload.note,
     )
-    analysis.status = payload.decision
-    analysis.decided_at = datetime.now(timezone.utc)
     db.add(decision)
     db.flush()
     write_audit(db, user_id=user.id, action=f"DECISION_{payload.decision}",
@@ -273,7 +293,6 @@ def decide(analysis_id: str,
             "type": "decision",
             "analysis_id": analysis.id,
             "decision": payload.decision,
-            "reviewer": user.email,
             "risk_score": analysis.fusion_risk_score,
         }))
     except Exception:
@@ -297,6 +316,7 @@ def decide(analysis_id: str,
 def similar(analysis_id: str,
             user: User = Depends(get_current_user),
             db: Session = Depends(get_db)) -> list[dict]:
+    _load_analysis_for_user(db, user, analysis_id)
     return similar_cases(db, analysis_id)
 
 
@@ -308,9 +328,7 @@ def patient_report_pdf(analysis_id: str,
 
     Tum bulgulari, riski, EKG sonucunu ve karar durumunu icerir.
     """
-    analysis = db.get(Analysis, analysis_id)
-    if not analysis:
-        raise HTTPException(404, "Analiz bulunamadı")
+    analysis = _load_analysis_for_user(db, user, analysis_id)
     study = db.get(Study, analysis.study_id)
     out = _analysis_out(analysis).model_dump()
     out["decisions"] = [
@@ -378,6 +396,8 @@ def get_signal(analysis_id: str,
     analysis = db.get(Analysis, analysis_id)
     if not analysis or not analysis.ecg_result:
         raise HTTPException(404, "EKG analizi bulunamadı")
+    if not can_access_study(user, db.get(Study, analysis.study_id)):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Bu analize erişim yetkiniz yok")
     fname = (analysis.ecg_result or {}).get("_file")
     if not fname:
         raise HTTPException(404, "Bu analiz için saklanmış sinyal yok")

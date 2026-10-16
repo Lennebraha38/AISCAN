@@ -42,6 +42,12 @@ NEGATION_CUES = re.compile(
     re.IGNORECASE,
 )
 
+# Cümlecik sınırı: cümle sonu noktalaması (. ; : ! ?) ve virgül/yeni satır.
+# Negasyon ipuçları yalnızca aynı cümlecik içinde geçerli sayılır; bu sınırların
+# ötesine taşan ipuçları yok sayılır (örn. "nodül mevcut, ... yok" ifadesinde
+# 'yok' artık 'nodül'ü negasyonlamaz).
+CLAUSE_BOUNDARY = re.compile(r"[.;:!?,\n]")
+
 URGENCY_BANDS = {"düşük": (0, 34), "orta": (35, 64), "yüksek": (65, 100)}
 
 
@@ -66,9 +72,21 @@ class TokenAttribution:
 def _is_negated(text: str, start: int, end: int, back_window: int = 48,
                 fwd_window: int = 32) -> bool:
     """Türkçe SÖZ dizilişi nedeniyle hem geriye ('nodül yok') hem ileriye
-    ('nodül izlenmedi') bakılır."""
+    ('nodül izlenmedi') bakılır; ancak ipucu YALNIZCA aynı cümlecik içinde
+    aranır. Cümle sonu noktalaması (. ; : ! ?) ve virgül kesin sınırdır, bu
+    sınırı aşan negasyon ipucu dikkate alınmaz."""
     backward = text[max(0, start - back_window):start]
+    # geriye bakışta son cümlecik sınırından sonrasını al
+    b_bounds = [m.end() for m in CLAUSE_BOUNDARY.finditer(backward)]
+    if b_bounds:
+        backward = backward[b_bounds[-1]:]
+
     forward = text[end:end + fwd_window]
+    # ileriye bakışta ilk cümlecik sınırından öncesini al
+    f_match = CLAUSE_BOUNDARY.search(forward)
+    if f_match:
+        forward = forward[:f_match.start()]
+
     return bool(NEGATION_CUES.search(backward) or NEGATION_CUES.search(forward))
 
 
@@ -84,7 +102,9 @@ def analyze_epikriz(text: str) -> dict:
     for pattern, weight, desc in LEXICON:
         for m in pattern.finditer(text):
             negated = _is_negated(text, m.start(), m.end())
-            signed = -weight if negated else weight
+            # Sadece pozitif (risk) agirlikli bulgu negasyonla ters cevrilir;
+            # normal bulgu (negatif agirlik) negasyonla riske DONUSMEZ.
+            signed = -weight if (negated and weight > 0) else weight
             raw_score += signed
             score01 = min(max((signed + 1.0) / 2.0, 0.0), 1.0)
             tokens.append(TokenAttribution(m.group(0), m.start(), m.end(), score01, negated))

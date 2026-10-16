@@ -7,6 +7,7 @@ import { api, getTokens } from "../../../lib/api";
 import {
   cleanDicom,
   cleanHea,
+  getOrCreateAnonSalt,
   hashAnonId,
   maskEpikriz,
   type DicomCleanReport,
@@ -44,18 +45,19 @@ export default function NewStudyPage() {
     setDicomReport(null);
     setCleanedBytes(null);
     try {
+      const salt = getOrCreateAnonSalt();
       const raw = new Uint8Array(await f.arrayBuffer());
       const isDicom =
         f.name.toLowerCase().endsWith(".dcm") ||
         String.fromCharCode(...raw.slice(128, 132)) === "DICM";
       if (isDicom) {
-        const { bytes, report } = await cleanDicom(raw, "pulsar-kkds-salt");
+        const { bytes, report } = await cleanDicom(raw, salt);
         setCleanedBytes(bytes);
         setDicomReport(report);
-        setAnonHash(await hashAnonId(`${f.name}:${f.size}:${f.lastModified}`, "pulsar-kkds-salt"));
+        setAnonHash(await hashAnonId(`${f.name}:${f.size}:${f.lastModified}`, salt));
       } else {
         // PNG/JPEG görüntü: kimlik taşımaz; hash yalnız dosya parmak izinden.
-        setAnonHash(await hashAnonId(`${f.name}:${f.size}:${f.lastModified}`, "pulsar-img-salt"));
+        setAnonHash(await hashAnonId(`${f.name}:${f.size}:${f.lastModified}`, salt));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Dosya işlenemedi");
@@ -69,13 +71,14 @@ export default function NewStudyPage() {
     setCleanedHeaText("");
     setError("");
     try {
+      const salt = getOrCreateAnonSalt();
       if (hea) {
         const text = await hea.text();
-        const { text: cleaned, report } = await cleanHea(text, "pulsar-ecg-salt");
+        const { text: cleaned, report } = await cleanHea(text, salt);
         setCleanedHeaText(cleaned);
         setHeaReport(report);
       }
-      setAnonHash(await hashAnonId(`${mat.name}:${mat.size}:${mat.lastModified}`, "pulsar-ecg-salt"));
+      setAnonHash(await hashAnonId(`${mat.name}:${mat.size}:${mat.lastModified}`, salt));
     } catch (e) {
       setError(e instanceof Error ? e.message : "EKG dosyası işlenemedi");
     }

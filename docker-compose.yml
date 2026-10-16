@@ -20,7 +20,13 @@ services:
       context: ./backend
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://pulsar:change-me@postgres:5432/pulsar}
-      JWT_SECRET: ${JWT_SECRET:-replace-with-a-long-random-secret}
+      # Uretim modu: zayif varsayilan secret ile baslatma engellenir;
+      # JWT_SECRET/ANON_SALT ortamda ZORUNLU olarak verilmelidir.
+      PULSAR_ENV: production
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET ortam degiskeni zorunludur}
+      ANON_SALT: ${ANON_SALT:?ANON_SALT ortam degiskeni zorunludur}
+      # Ters proxy arkasinda X-Forwarded-For'a guvenilsin mi (Vercel/nginx: 1).
+      TRUST_FORWARDED_FOR: ${TRUST_FORWARDED_FOR:-0}
       AI_CORE_URL: ${AI_CORE_URL:-http://ai-core:8001}
     ports:
       - "8000:8000"

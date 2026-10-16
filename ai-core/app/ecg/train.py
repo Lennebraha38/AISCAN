@@ -167,6 +167,32 @@ def stratified_split(y: np.ndarray, seed: int = 42) -> tuple[np.ndarray, ...]:
     return np.array(tr), np.array(va), np.array(te)
 
 
+def stratified_holdout(idx: np.ndarray, labels: np.ndarray, val_frac: float = 0.15,
+                       seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
+    """Egitim indekslerini etiket-bazli tabakali olarak train/val'e boler.
+
+    Test verisi bu ayrimda YER ALMAZ; erken durdurma ve model secimi yalnizca
+    bu dogrulama kumesi uzerinden yapilir. Seed ile deterministik tekrarlanabilir.
+    """
+    rng = random.Random(seed)
+    idx_by_cls: dict[int, list[int]] = {}
+    for i in idx:
+        idx_by_cls.setdefault(int(labels[i]), []).append(int(i))
+    tr, va = [], []
+    for _, idxs in sorted(idx_by_cls.items()):
+        rng.shuffle(idxs)
+        n = len(idxs)
+        n_val = int(round(n * val_frac))
+        if n >= 2:
+            n_val = max(1, n_val)
+        n_val = min(n_val, n - 1)
+        va += idxs[:n_val]
+        tr += idxs[n_val:]
+    rng.shuffle(tr)
+    rng.shuffle(va)
+    return np.array(tr), np.array(va)
+
+
 def _batch(X: np.memmap, idx: np.ndarray, augment: bool = False, rng: np.random.Generator | None = None) -> np.ndarray:
     rng = rng or np.random.default_rng(0)
     xb = np.asarray(X[idx], dtype=np.float32)
@@ -483,11 +509,16 @@ def run_robustness(data_dir: Path, models_dir: Path, out_dir: Path) -> None:
         return np.concatenate(preds)
 
     probs_clean = predict(te, lambda b: b)
+    # RNG'ler donguden ONCE bir kez olusturulur; aksi halde her batch ayni
+    # gurultuyu uretir. Boylece her yineleme taze ve tekrarlanabilir gurultu alir.
+    rng_005 = np.random.default_rng(1)
+    rng_010 = np.random.default_rng(2)
+    rng_020 = np.random.default_rng(3)
     scenarios = {
         "temiz": probs_clean,
-        "gauss_0.05": predict(te, lambda b: b + np.random.default_rng(1).normal(0, 0.05, b.shape).astype(np.float32)),
-        "gauss_0.10": predict(te, lambda b: b + np.random.default_rng(2).normal(0, 0.10, b.shape).astype(np.float32)),
-        "gauss_0.20": predict(te, lambda b: b + np.random.default_rng(3).normal(0, 0.20, b.shape).astype(np.float32)),
+        "gauss_0.05": predict(te, lambda b: b + rng_005.normal(0, 0.05, b.shape).astype(np.float32)),
+        "gauss_0.10": predict(te, lambda b: b + rng_010.normal(0, 0.10, b.shape).astype(np.float32)),
+        "gauss_0.20": predict(te, lambda b: b + rng_020.normal(0, 0.20, b.shape).astype(np.float32)),
         "baseline_wander": predict(
             te,
             lambda b: b + (0.3 * np.sin(np.linspace(0, 6 * np.pi, b.shape[-1]))).astype(np.float32)[None, None, :],
@@ -530,6 +561,9 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
     X, y, _ids, sub = load_cache(data_dir)
     tr, va, te = stratified_split(y)
     train_idx = np.concatenate([tr, va])
+    seed = CFG.get("cv", {}).get("random_state", 42)
+    # Agirlik baslangici ve permutasyon icin deterministik RNG.
+    torch.manual_seed(seed)
     print("stage2: superclass backbone yukleniyor...")
 
     ckpt = torch.load(models_dir / "ecg_resnet.pt", map_location="cpu", weights_only=False)
@@ -588,7 +622,10 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
     stage2_result: dict = {"subclass_heads": head_desc, "subclass_counts": {}}
     for s, classes in head_desc.items():
         labels = sub_labels[s]
-        valid_tr = np.array([i for i in train_idx if labels[i] >= 0])
+        # Dogrulama kumesi EGITIM verisinden ayrilir; test seti egitim/erken
+        # durdurma kararlarina hicbir sekilde dahil edilmez (sizinti yok).
+        valid_train = np.array([i for i in train_idx if labels[i] >= 0])
+        valid_tr, valid_va = stratified_holdout(valid_train, labels, seed=seed)
         valid_te = np.array([i for i in te if labels[i] >= 0])
         pos_te = {int(g): j for j, g in enumerate(te)}
         valid_te_pos = np.array([pos_te[int(i)] for i in valid_te])
@@ -602,6 +639,8 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
 
         Xt = torch.from_numpy(pooled(valid_tr)).to(dev)
         yt = torch.from_numpy(labels[valid_tr]).to(dev)
+        Xv = torch.from_numpy(pooled(valid_va)).to(dev)
+        yv = labels[valid_va]
         Xe = torch.from_numpy(feats_te[valid_te_pos]).to(dev)
         ye = labels[valid_te]
         n_tr = len(valid_tr)
@@ -612,9 +651,10 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
         opt = torch.optim.AdamW(head.parameters(), 
                                 lr=stage2_cfg.get("learning_rate", 3e-3), 
                                 weight_decay=stage2_cfg.get("weight_decay", 1e-3))
+        head_rng = np.random.default_rng(seed)
         best_f1, best_state, bad = 0.0, None, 0
         for ep in range(1, epochs + 1):
-            perm = torch.randperm(n_tr).numpy()
+            perm = head_rng.permutation(n_tr)
             head.train()
             total, nb = 0.0, 0
             for i in range(0, n_tr, batch_size):
@@ -629,24 +669,29 @@ def run_stage2(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int, bat
                 nb += 1
             head.eval()
             with torch.no_grad():
-                pred = head(Xe).argmax(1).cpu().numpy()
-            f1 = float(f1_score(ye, pred, average="macro"))
+                val_pred = head(Xv).argmax(1).cpu().numpy()
+            # Model secimi/erken durdurma yalnizca dogrulama kumesi ile.
+            f1 = float(f1_score(yv, val_pred, average="macro"))
             if f1 > best_f1:
                 best_f1, bad, best_state = f1, 0, {k: v.clone() for k, v in head.state_dict().items()}
             else:
                 bad += 1
                 if bad >= patience:
-                    print(f"  {s}: erken durdurma @ ep {ep}")
+                    print(f"  {s}: erken durdurma @ ep {ep} (val_macroF1={f1:.4f})")
                     break
         if best_state is not None:
             head.load_state_dict(best_state)
         head.eval()
+        # Test seti SADECE burada, tek seferlik nihai degerlendirme icin kullanilir.
         with torch.no_grad():
             pred = head(Xe).argmax(1).cpu().numpy()
         rep = classification_report(ye, pred, target_names=classes, output_dict=True)
+        stage2_result[f"{s}_val_macro_f1"] = round(best_f1, 4)
         stage2_result[f"{s}_macro_f1"] = round(float(f1_score(ye, pred, average="macro")), 4)
         stage2_result[f"{s}_report"] = rep
-        print(f"  {s}: alt-grup macro F1 = {stage2_result[f'{s}_macro_f1']:.4f} (n_test={len(valid_te)})")
+        print(f"  {s}: val_macroF1={best_f1:.4f} | alt-grup TEST macro F1 = "
+              f"{stage2_result[f'{s}_macro_f1']:.4f} "
+              f"(n_train={len(valid_tr)} n_val={len(valid_va)} n_test={len(valid_te)})")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "stage2_metrics.json").write_text(json.dumps(stage2_result, indent=2))

@@ -6,7 +6,6 @@ modeli bağlamı yitirmez.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 
 from .patterns import (
@@ -72,11 +71,10 @@ def _collect(text: str, mask_dates: bool) -> list[Finding]:
         for m in pattern.finditer(text):
             value = next((g for g in m.groups() if g), m.group(0))
             start = m.start() if not m.groups() else m.start(1) if value == m.group(1) else m.start()
-            # TC grubu yakalandıysa checksum doğrula; geçersizse yine de işaretle.
-            if ptype == "TC_KIMLIK":
-                digits = re.sub(r"\D", "", value)
-                if len(digits) != 11:
-                    continue
+            # TC adayı ise resmi checksum ile doğrula; geçersizse atla.
+            # TS portundaki tcKimlikGecerli ile aynı davranış.
+            if ptype == "TC_KIMLIK" and not tc_kimlik_gecerli(value):
+                continue
             raw.append((start, m.end(), ptype, value))
 
     if mask_dates:
@@ -120,5 +118,11 @@ def mask(text: str, mask_dates: bool = False) -> MaskResult:
 
 
 def contains_pii(text: str) -> bool:
-    """Defans-in-depth kontrolü: sunucu tarafı da bunu çağırabilir."""
-    return bool(_collect(text, mask_dates=False))
+    """Defans-in-depth kontrolü: sunucu tarafı da bunu çağırabilir.
+
+    Doğum tarihi bağlamını (DOB_CONTEXT) ve genel tarih kalıplarını
+    (GENEL_TARIH) da tarar; böylece mask(mask_dates=True) ile aynı
+    kümeyi yakalar ve tarih içeren bir başlık/epikriz 'temiz'
+    sayılmaz.
+    """
+    return bool(_collect(text, mask_dates=True))

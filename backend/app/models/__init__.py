@@ -41,6 +41,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20))  # admin|hekim|radyolog|asistan
+    # Şifre değişiminde artırılır; eski JWT'leri geçersiz kılar (revocation).
+    token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     decisions: Mapped[list["ReviewDecision"]] = relationship(back_populates="reviewer")
@@ -91,7 +93,7 @@ class ReviewDecision(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     analysis_id: Mapped[str] = mapped_column(ForeignKey("analyses.id"), index=True)
     reviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    decision: Mapped[str] = mapped_column(String(10))  # APPROVED|REJECTED
+    decision: Mapped[str] = mapped_column(String(20))  # APPROVED|REJECTED|SECOND_OPINION
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -140,6 +142,25 @@ BEFORE UPDATE OR DELETE ON audit_logs
 FOR EACH ROW EXECUTE FUNCTION prevent_audit_mutation();
 """
 
+# SQLite için eşdeğer append-only trigger'lar (Postgres trigger'ının yokluğu
+# nedeniyle ham SQL ile UPDATE/DELETE bypass edilebiliyordu).
+SQLITE_IMMUTABLE_TRIGGERS = [
+    """
+    CREATE TRIGGER IF NOT EXISTS audit_logs_immutable_update
+    BEFORE UPDATE ON audit_logs
+    BEGIN
+        SELECT RAISE(ABORT, 'audit_logs append-only: guncelleme yasak');
+    END;
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS audit_logs_immutable_delete
+    BEFORE DELETE ON audit_logs
+    BEGIN
+        SELECT RAISE(ABORT, 'audit_logs append-only: silme yasak');
+    END;
+    """,
+]
+
 
 def make_engine(database_url: str):
     return create_engine(
@@ -149,7 +170,7 @@ def make_engine(database_url: str):
 
 
 def init_db(engine) -> None:
-    """Tabloları oluşturur; postgres ise audit immutability trigger'ını ekler."""
+    """Tabloları oluşturur; audit immutability trigger'ını ekler."""
     Base.metadata.create_all(engine)
     if engine.dialect.name == "postgresql":
         with engine.begin() as conn:
@@ -159,6 +180,10 @@ def init_db(engine) -> None:
             ).fetchone()
             if not exists:
                 conn.exec_driver_sql(IMMUTABLE_TRIGGER_SQL)
+    elif engine.dialect.name == "sqlite":
+        with engine.begin() as conn:
+            for ddl in SQLITE_IMMUTABLE_TRIGGERS:
+                conn.exec_driver_sql(ddl)
 
 
 @event.listens_for(AuditLog, "before_update")

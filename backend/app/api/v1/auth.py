@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from ...core.deps import client_ip, get_current_user, get_db
+from ...core.ratelimit import rate_limit
 from ...core.security import (
     create_access_token,
     create_refresh_token,
@@ -28,14 +29,16 @@ router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
+    # Brute-force koruması (IP başına dakikada 30 deneme).
+    rate_limit(request, "login", 30, 60)
     user = db.query(User).filter(User.email == payload.email.lower().strip()).first()
     if not user or not verify_password(payload.password, user.password_hash):
         write_audit(db, user_id=None, action="LOGIN_FAILED", entity_type="user",
                     entity_id=payload.email[:32], ip=client_ip(request))
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "E-posta veya şifre hatalı")
     tokens = TokenResponse(
-        access_token=create_access_token(user.id, user.role),
-        refresh_token=create_refresh_token(user.id, user.role),
+        access_token=create_access_token(user.id, user.role, user.token_version),
+        refresh_token=create_refresh_token(user.id, user.role, user.token_version),
         role=user.role,
     )
     write_audit(db, user_id=user.id, action="LOGIN", entity_type="user",
@@ -51,9 +54,11 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenResp
     user = db.get(User, claims["sub"])
     if not user:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Kullanıcı bulunamadı")
+    if int(claims.get("tv", 0)) != int(getattr(user, "token_version", 0) or 0):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token geçersiz kılınmış")
     return TokenResponse(
-        access_token=create_access_token(user.id, user.role),
-        refresh_token=create_refresh_token(user.id, user.role),
+        access_token=create_access_token(user.id, user.role, user.token_version),
+        refresh_token=create_refresh_token(user.id, user.role, user.token_version),
         role=user.role,
     )
 
@@ -96,6 +101,8 @@ def change_password(payload: PasswordChangeRequest,
     if len(payload.new_password) < 8:
         raise HTTPException(422, "Yeni şifre en az 8 karakter olmalı")
     user.password_hash = hash_password(payload.new_password)
+    # Eski access/refresh token'ları geçersiz kıl.
+    user.token_version = int(getattr(user, "token_version", 0) or 0) + 1
     write_audit(db, user_id=user.id, action="PASSWORD_CHANGED", entity_type="user",
                 entity_id=user.id)
     return {"status": "ok"}

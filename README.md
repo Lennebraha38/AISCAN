@@ -60,6 +60,17 @@ Sonuçlar ve grafikler: `docs/metrics/` · Model: `ai-core/models/`
 ## Hızlı Başlangıç
 
 ```bash
+# Üretim benzeri çalıştırma için güçlü secret'lar ZORUNLUDUR
+# (docker-compose PULSAR_ENV=production ile başlar; zayıf varsayılan reddedilir).
+cp .env.example .env
+python - <<'PY'
+import secrets, pathlib
+p = pathlib.Path(".env"); t = p.read_text(encoding="utf-8")
+t = t.replace("JWT_SECRET=replace-with-a-long-random-secret", f"JWT_SECRET={secrets.token_hex(32)}")
+t = t.replace("ANON_SALT=replace-with-a-random-anon-salt", f"ANON_SALT={secrets.token_hex(16)}")
+p.write_text(t, encoding="utf-8")
+PY
+
 docker compose up -d --build     # postgres(pgvector) + api + ai-core + web
 # demo kullanıcıları:
 PYTHONPATH=backend .venv/bin/python backend/scripts/seed.py
@@ -69,11 +80,16 @@ PYTHONPATH=backend .venv/bin/python backend/scripts/seed.py
 - API: http://localhost:8000/docs
 - AI Core: http://localhost:8001/docs
 
+> Güvenlik notu: `JWT_SECRET` (≥32 karakter) ve `ANON_SALT` (≥16 karakter)
+> üretimde zorunludur. `PULSAR_ENV=production` iken bu değerler eksik/zayıfsa
+> uygulama başlamaz. Ters proxy (Vercel/nginx) arkasında `TRUST_FORWARDED_FOR=1`
+> verin; aksi halde audit IP'si için `X-Forwarded-For` güvenilmez.
+
 ## Yerel Geliştirme (Docker'sız)
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e backend -e ai-core -e anonymizer/dicom_cleaner -e anonymizer/pii_nlp
+pip install -e backend -e ai-core -e anonymizer/dicom_cleaner -e anonymizer/pii_nlp -e anonymizer/ecg_deid
 
 # backend
 DATABASE_URL=sqlite:///./pulsar-dev.db PYTHONPATH=backend uvicorn app.main:app --port 8000

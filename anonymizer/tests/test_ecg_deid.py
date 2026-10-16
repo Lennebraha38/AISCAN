@@ -1,7 +1,11 @@
 """ecg_deid modulu testleri."""
+import os
+
 import pytest
 
 from ecg_deid import deidentify_hea, scan_hea_leaks
+
+os.environ.setdefault("ANON_SALT", "test-anon-salt")
 
 SAMPLE = """JS00001 12 500 5000
 JS00001.mat 16+24 1000/mV 16 0 -254 21756 0 I
@@ -10,7 +14,7 @@ JS00001.mat 16+24 1000/mV 16 0 264 -599 0 II
 #Sex: Male
 #Dx: 164889003,59118001
 #Rx: Unknown
-#Hx: Hasta Ahmet Yilmaz, TC: 12345678902
+#Hx: Hasta Ahmet Yilmaz, TC: 10000000146
 """
 
 
@@ -35,7 +39,7 @@ def test_dx_preserved():
 def test_free_text_pii_masked():
     r = deidentify_hea(SAMPLE)
     hx = [l for l in r.content.splitlines() if l.startswith("#Hx")]
-    assert hx and "Ahmet" not in hx[0] and "12345678902" not in hx[0]
+    assert hx and "Ahmet" not in hx[0] and "10000000146" not in hx[0]
 
 
 def test_deterministic_pseudonym():

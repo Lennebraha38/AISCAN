@@ -6,28 +6,20 @@ icin report_pdf.render_report kullanilir.
 """
 from __future__ import annotations
 
-import hashlib
 import io
 
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from reportlab.graphics.barcode.qr import QrCodeWidget
 from reportlab.graphics.shapes import Drawing
 
-_DV = "/root/projeler/pulsar-kkds/backend/app/static/DejaVuSans.ttf"
-_DVB = "/root/projeler/pulsar-kkds/backend/app/static/DejaVuSans-Bold.ttf"
-_TTF = False
-try:
-    pdfmetrics.registerFont(TTFont("DVS", _DV))
-    pdfmetrics.registerFont(TTFont("DVSB", _DVB))
-    _TTF = True
-except Exception:
-    pass
+# Türkçe karakter desteği için report_pdf ile AYNI font kayıt mantığı
+# kullanılır: "DVS"/"DVSB" report_pdf import edilirken platformdan bağımsız
+# olarak kaydedilir (DejaVu → sistem TTF → base-14 fallback).
+from .report_pdf import verification_code
 
-F = "Helvetica"
-FB = "Helvetica-Bold"
+F = "DVS"
+FB = "DVSB"
 
 
 def patient_report(study: dict, analysis: dict) -> bytes:
@@ -39,9 +31,7 @@ def patient_report(study: dict, analysis: dict) -> bytes:
     y = H - 48
 
     def fnt(bold=False):
-        if _TTF:
-            return FB if bold else F
-        return ("Helvetica-Bold" if bold else "Helvetica")
+        return FB if bold else F
 
     def sz(pt):
         c.setFont(fnt(), pt)
@@ -213,9 +203,10 @@ def patient_report(study: dict, analysis: dict) -> bytes:
     y -= 16
 
     aid = analysis.get("id", "")
-    dec = decisions[0] if decisions else {}
-    dec_at = str(dec.get("decided_at", ""))
-    code = hashlib.sha256(f"{aid}|{dec_at}".encode()).hexdigest()[:16].upper() if dec_at and dec_at != "None" else "BILINMIYOR"
+    # Doğrulama kodu /v1/verify ile AYNI kaynaktan (analiz.decided_at) ve
+    # aynı yardımcıyla üretilir; aksi halde QR hiçbir zaman doğrulanamaz.
+    decided_at = analysis.get("decided_at")
+    code = verification_code(aid, decided_at) if (aid and decided_at) else "BILINMIYOR"
 
     qrw = QrCodeWidget(f"PULSAR-KKDS:{code}")
     qb = qrw.getBounds()

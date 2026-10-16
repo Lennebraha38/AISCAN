@@ -11,6 +11,7 @@ from app.ecg.preprocess import (
     detect_rpeaks,
     normalize_leadwise,
     preprocess_record,
+    resample_to,
 )
 
 
@@ -84,6 +85,15 @@ def test_preprocess_resamples_from_257hz():
     raw = np.stack([_synthetic_ecg(fs=257)[:2570] for _ in range(12)])
     out = preprocess_record(raw, fs_in=257, target_fs=250)
     assert out.shape == (12, 2500)
+
+
+def test_resample_rejects_nonpositive_fs():
+    # fs_in/fs_out <= 0 -> resample_poly cokmesi yerine net ValueError
+    x = np.zeros((12, 1000))
+    with pytest.raises(ValueError):
+        resample_to(x, fs_in=0, fs_out=250)
+    with pytest.raises(ValueError):
+        resample_to(x, fs_in=500, fs_out=0)
 
 
 def test_normalize_zero_mean_unit_std():

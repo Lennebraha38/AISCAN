@@ -7,6 +7,7 @@ testler ilgili *_test.py dosyalarındadır.
 from __future__ import annotations
 
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -23,6 +24,8 @@ from dicom_cleaner import clean_dicom_bytes, scan_for_phi
 from pii_nlp import contains_pii, mask
 from pii_nlp.patterns import tc_kimlik_gecerli
 from ecg_deid import deidentify_hea, scan_hea_leaks
+
+os.environ.setdefault("ANON_SALT", "test-anon-salt")
 
 
 # --------------------------------------------------------------- fixtures ----
