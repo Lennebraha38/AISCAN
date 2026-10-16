@@ -55,6 +55,8 @@ def test_vision_analyze_returns_findings_and_cam():
     assert body["xai_method"].startswith(
         ("energy-saliency", "grad-cam", "finding-saliency")
     )
+    # Dürüstlük etiketi: varsayılan yol heuristik demodur, eğitilmiş model değil.
+    assert body["engine"] == "heuristic-demo"
 
 
 def test_vision_deterministic():

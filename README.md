@@ -1,6 +1,7 @@
 # Pulsar-KKDS
 
-**KVKK Uyumlu Multimodal Tıbbi Karar Destek Platformu (SaMD)**
+**SaMD Hedefli Multimodal Karar Destek Prototipi** (KVKK ilkeleri gözetilerek
+tasarlanmıştır)
 
 TEKNOFEST 2026 — Yapay Zekâ ile Sağlıkta Devrim Yarışması, **Lise /
 Kardiyoloji** görevi: 12 derivasyonlu EKG sinyallerini üç üst sınıfa
@@ -8,14 +9,18 @@ Kardiyoloji** görevi: 12 derivasyonlu EKG sinyallerini üç üst sınıfa
 epikriz analizi ve radyoloji görüntü akışı ikincil modality olarak aynı
 platformda çalışır.
 
-> ⚠️ Bu sistem bir **Karar Destek Sistemidir (SaMD)**. Nihai klinik karar hekim
-> sorumluluğundadır (MDR human-in-the-loop).
+> ⚠️ **Dürüst konumlandırma:** Bu bir **karar destek prototipidir**; onaylanmış
+> bir tıbbi cihaz (SaMD) veya klinik üretim sistemi **değildir**. Nihai klinik
+> karar hekim sorumluluğundadır (MDR human-in-the-loop). Görüntü (radyoloji) ve
+> NLP modülleri **demo heuristiğidir** (eğitilmiş klinik model değildir). Klinik
+> kanıt ve anonimleştirme kapsamı sınırları için bkz.
+> **[docs/SINIRLAMALAR.md](docs/SINIRLAMALAR.md)**.
 
 ## Üç Sütunlu Mimari
 
 | Sütun | Uygulama |
 |---|---|
-| **KVKK** | Zero-Knowledge Architecture: DICOM PHI tag'leri, WFDB `.hea` kimlik alanları ve epikriz PII'si istemcide temizlenir; sunucuya yalnız anonim veri ulaşır (`.hea` dosyası hiç gönderilmez) |
+| **Gizlilik (KVKK ilkeleri)** | Zero-Knowledge tasarım: DICOM PHI tag'leri (iç içe sequence'ler dahil), PNG/JPEG meta verisi (EXIF/XMP/ICC/text), WFDB `.hea` kimlik alanları ve epikriz PII'si istemcide temizlenir; sunucuya yalnız anonim veri ulaşır (`.hea` dosyası hiç gönderilmez). Kapsam sınırları için bkz. docs/SINIRLAMALAR.md |
 | **MDR** | Human-in-the-loop: AI çıktısı hekim onayı olmadan kesinleşmez; append-only audit log |
 | **XAI** | Grad-CAM 1D (zaman × karar odağı) + derivasyon saliency matrisi + token düzeyi metin attribution |
 
@@ -54,8 +59,9 @@ cd ai-core
 Sonuçlar ve grafikler: `docs/metrics/` · Model: `ai-core/models/`
 
 > CI (GitHub Actions): `.github/workflows/train.yml` veri indirme → cache → eğitim →
-> robustness → stage2 sürecini otomatik çalıştırır ve sonuçları (model + metric'ler +
-> figürler) repo'ya commit eder. Cihaz içi depolama gerekmez.
+> robustness → stage2 sürecini otomatik çalıştırır. Model + metrik + figürler
+> **artifact olarak yüklenir** (doğrudan `main`'e commit edilmez; sürümleme ve
+> inceleme release/PR süreciyle yapılır).
 
 ## Hızlı Başlangıç
 
@@ -161,6 +167,7 @@ PYTHONPATH=anonymizer/dicom_cleaner pytest anonymizer/tests/test_dicom_cleaner.p
 PYTHONPATH=anonymizer/pii_nlp      pytest anonymizer/tests/test_pii_nlp.py
 PYTHONPATH=ai-core                 pytest ai-core/tests
 PYTHONPATH=backend                 pytest backend/tests
+cd frontend && npm test            # vitest birim testleri (anonimleştirme)
 cd frontend && npm run build       # tip kontrolü dahil
 ```
 
@@ -194,3 +201,19 @@ cd anonymizer && python -m pytest tests/test_smoke.py -v
 - Gerçek secret'lar commit edilmez; `.env.example` şablondur.
 - `audit_logs` tablosu append-only'dir (DB trigger + ORM koruması).
 - Backend, maskelenmemiş PII içeren istekleri 422 ile reddeder (defans-in-depth).
+- Oturum: access token kısa ömürlüdür; **refresh token tarayıcıda HttpOnly
+  çerezde** tutulur ve her yenilemede döndürülür (rotation). Şifre değişiminde
+  `token_version` artırılarak tüm eski oturumlar düşürülür.
+- Güvenlik politikası ve bildirim akışı: `SECURITY.md`.
+
+## Bilinen Sınırlar
+
+Sistem bir **karar destek prototipidir**; klinik üretim için hazır değildir.
+Klinik kanıt, modality olgunluğu (görüntü/NLP = demo heuristiği) ve
+anonimleştirme kapsamı sınırları (burn-in pixel metni, iç içe/üretici-özel
+DICOM yapıları vb.) için bkz. **[docs/SINIRLAMALAR.md](docs/SINIRLAMALAR.md)**.
+
+## Lisans
+
+MIT — bkz. [LICENSE](LICENSE). Yazılım "olduğu gibi" sunulur; klinik kullanım
+için onaylanmış bir tıbbi cihaz değildir.

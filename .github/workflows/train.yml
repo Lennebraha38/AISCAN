@@ -4,8 +4,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Model/metric artifact'lari main dalina DOGRUDAN commit EDILMEZ; surumleme
+# ve inceleme icin artifact olarak yuklenir (release/PR sureci ile yayinlanir).
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: teknofest-eval
@@ -83,15 +85,14 @@ jobs:
           cd ai-core
           python -m app.ecg.train stage2 --data-dir ../data/ecg --epochs-stage2 15
 
-      - name: Commit artifacts
-        run: |
-          git config user.name "AISCAN CI"
-          git config user.email "ci@users.noreply.github.com"
-          git add ai-core/models/ecg_resnet.pt ai-core/models/ecg_config.json \
-                  docs/figures docs/metrics || true
-          if git diff --cached --quiet; then
-            echo "degisiklik yok"
-          else
-            git commit -m "ci: Teknofest EKG eval sonuclari [skip ci]"
-            git push
-          fi
+      - name: Upload artifacts (model + metrikler + figurler)
+        uses: actions/upload-artifact@v4
+        with:
+          name: teknofest-ecg-eval
+          if-no-files-found: warn
+          retention-days: 90
+          path: |
+            ai-core/models/ecg_resnet.pt
+            ai-core/models/ecg_config.json
+            docs/figures/**
+            docs/metrics/**

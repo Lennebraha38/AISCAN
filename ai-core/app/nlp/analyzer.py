@@ -1,9 +1,16 @@
 """Türkçe epikriz analiz motoru.
 
-Kural + tıbbi sözlük tabanlı aciliyet sınıflandırması ve token düzeyinde
-attribution (metin XAI). Mimari, BERTurk fine-tune modeliyle değiştirilebilir
-şekilde tasarlandı: ``BERTurkBackend`` arayüzü aynı şemayı üretir
-(bkz. scripts/train/train_nlp.py).
+Bu modül KURAL/HEURISTIK tabanlı bir Türkçe klinik-metin analizcidir:
+anahtar sözcük/regex sözlüğü (LEXICON) + negasyon kuralları
+(NEGATION_CUES, cümlecik sınırlı) ile aciliyet sınıflandırması ve token
+düzeyinde attribution (metin XAI) üretir. EĞİTİLMİŞ bir klinik NLP/BERT
+modeli DEĞİLDİR; çıktılar tanı amaçlı değil, deterministik demo/ön
+değerlendirme amaçlıdır.
+
+Mimari, ileride bir BERTurk fine-tune modeliyle değiştirilebilir şekilde
+tasarlandı: ``BERTurkBackend`` arayüzü aynı şemayı üretir
+(bkz. scripts/train/train_nlp.py). Checkpoint yoksa bu modül kural tabanlı
+heuristik motora düşer.
 
 Negasyon yönetimi: terimden önceki pencerede "yok / izlenmedi / saptanmadı /
 kalmadı / -sız" gibi ipuçları varsa katkı ters işaretlenir.

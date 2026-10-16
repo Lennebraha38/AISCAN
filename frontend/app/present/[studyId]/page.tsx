@@ -167,6 +167,11 @@ export default function PresentPage() {
           {/* Bulgular */}
           <div style={{ background: "#141d35", borderRadius: 12, padding: 16, flex: 1, overflow: "auto" }}>
             <p style={{ fontSize: 12, color: "#8a93ab", marginBottom: 8 }}>BULGULAR</p>
+            {slide.vision && !String(slide.vision.engine || "").startsWith("checkpoint") && (
+              <p style={{ fontSize: 11, color: "#7a86a8", marginBottom: 8 }}>
+                Demo heuristiği (eğitilmiş klinik model değil)
+              </p>
+            )}
             {sorted.length ? sorted.map((f) => (
               <div key={f.label} style={{ marginBottom: 8 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 2 }}>

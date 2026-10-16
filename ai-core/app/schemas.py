@@ -19,6 +19,9 @@ class VisionResponse(BaseModel):
     xai_method: str
     base_image_b64: str | None = None
     modality: str | None = None
+    # Dürüstlük etiketi: varsayılan yol "heuristic-demo"dur (eğitilmiş klinik
+    # radyoloji modeli değil). Eğitilmiş checkpoint yüklenirse "checkpoint:<yol>".
+    engine: str | None = None
 
 
 class TokenAttributionOut(BaseModel):

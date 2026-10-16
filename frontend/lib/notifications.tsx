@@ -58,6 +58,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       try {
         const resp = await fetch(url, {
           headers: { Authorization: `Bearer ${tokens.access_token}` },
+          credentials: "include",
           signal: ctrl.signal,
         });
         if (!resp.ok || !resp.body) return;

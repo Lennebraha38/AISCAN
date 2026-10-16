@@ -7,11 +7,14 @@ import { api, getTokens } from "../../../lib/api";
 import {
   cleanDicom,
   cleanHea,
+  cleanImageMetadata,
   getOrCreateAnonSalt,
   hashAnonId,
+  imageFormat,
   maskEpikriz,
   type DicomCleanReport,
   type HeaCleanReport,
+  type ImageCleanReport,
   type PiiFinding,
 } from "../../../lib/browser-anonymizer";
 
@@ -30,6 +33,7 @@ export default function NewStudyPage() {
   const [maskedEpikriz, setMaskedEpikriz] = useState("");
   const [piiFindings, setPiiFindings] = useState<PiiFinding[]>([]);
   const [dicomReport, setDicomReport] = useState<DicomCleanReport | null>(null);
+  const [imageReport, setImageReport] = useState<ImageCleanReport | null>(null);
   const [cleanedBytes, setCleanedBytes] = useState<Uint8Array | null>(null);
   const [anonHash, setAnonHash] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,6 +47,7 @@ export default function NewStudyPage() {
     setFile(f);
     setError("");
     setDicomReport(null);
+    setImageReport(null);
     setCleanedBytes(null);
     try {
       const salt = getOrCreateAnonSalt();
@@ -55,9 +60,14 @@ export default function NewStudyPage() {
         setCleanedBytes(bytes);
         setDicomReport(report);
         setAnonHash(await hashAnonId(`${f.name}:${f.size}:${f.lastModified}`, salt));
-      } else {
-        // PNG/JPEG görüntü: kimlik taşımaz; hash yalnız dosya parmak izinden.
+      } else if (imageFormat(raw)) {
+        // PNG/JPEG: EXIF/XMP/ICC/text meta verisi istemcide temizlenir.
+        const { bytes, report } = cleanImageMetadata(raw);
+        setCleanedBytes(bytes);
+        setImageReport(report);
         setAnonHash(await hashAnonId(`${f.name}:${f.size}:${f.lastModified}`, salt));
+      } else {
+        throw new Error("Desteklenmeyen dosya türü (DICOM / PNG / JPEG bekleniyor)");
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Dosya işlenemedi");
@@ -107,15 +117,27 @@ export default function NewStudyPage() {
               hashed: dicomReport.hashed,
               private_tags_removed: dicomReport.privateTagsRemoved,
             }
-          : null,
+          : imageReport
+            ? {
+                format: imageReport.format,
+                removed_metadata: imageReport.removedChunks,
+              }
+            : null,
       });
       let analysisId: string | null = null;
       if (modalityKind === "ecg" && file) {
         const res = await api.analyzeEcgStudy(study.id, file, "signal.mat");
         analysisId = res.analysis_id;
       } else if (cleanedBytes) {
-        const blob = new Blob([cleanedBytes as unknown as BlobPart], { type: "application/dicom" });
-        const res = await api.analyzeStudy(study.id, blob, "anonymized.dcm");
+        const isImage = imageReport !== null;
+        const type = isImage
+          ? imageReport.format === "png"
+            ? "image/png"
+            : "image/jpeg"
+          : "application/dicom";
+        const fname = isImage ? `anonymized.${imageReport.format === "png" ? "png" : "jpg"}` : "anonymized.dcm";
+        const blob = new Blob([cleanedBytes as unknown as BlobPart], { type });
+        const res = await api.analyzeStudy(study.id, blob, fname);
         analysisId = res.analysis_id;
       }
       router.push(`/viewer/${study.id}${analysisId ? `?analysis=${analysisId}` : ""}`);
@@ -130,6 +152,7 @@ export default function NewStudyPage() {
     (dicomReport?.removed.length ?? 0) +
     (dicomReport?.hashed.length ?? 0) +
     (dicomReport?.privateTagsRemoved ?? 0) +
+    (imageReport?.removedChunks.length ?? 0) +
     piiFindings.length;
 
   return (
@@ -137,7 +160,7 @@ export default function NewStudyPage() {
       <h1>Yeni Çalışma — Anonimleştirilmiş Yükleme</h1>
 
       <div className="card" style={{ borderColor: "#9ec2ff", background: "#f3f8ff" }}>
-        <span className="badge kvkk">KVKK · Zero-Knowledge Architecture</span>
+        <span className="badge kvkk">Gizlilik · Zero-Knowledge (KVKK ilkeleri)</span>
         <p style={{ marginBottom: 0 }}>
           Dosyanız bu tarayıcıda anonimleştirilir; sunucuya yalnızca temizlenmiş veri iletilir.
           Ham dosya hiçbir ağ isteğinde bulunmaz.
@@ -241,8 +264,27 @@ export default function NewStudyPage() {
             </ul>
           </div>
         )}
-        {!dicomReport && file && (
-          <p className="anon-ok">✓ Görüntü kimlik bilgisi taşımıyor; parmak izi hash'i üretildi.</p>
+        {imageReport && (
+          <div className="anon-panel">
+            <strong>
+              Görüntü Meta Verisi Temizlendi ({imageReport.removedChunks.length}) — {imageReport.format.toUpperCase()}
+            </strong>
+            <ul>
+              {imageReport.removedChunks.length === 0 && (
+                <li className="anon-ok">✓ Meta veri chunk&apos;ı bulunamadı (temiz dosya)</li>
+              )}
+              {imageReport.removedChunks.map((c, i) => (
+                <li key={`${c}-${i}`} className="anon-ok">✓ {c} meta verisi kaldırıldı</li>
+              ))}
+            </ul>
+            <small style={{ color: "#8a93ab" }}>
+              Not: Görüntü üzerine basılmış (burned-in) yazı tespit edilemez; yüksek riskli
+              görüntülerde manuel doğrulama gerekir.
+            </small>
+          </div>
+        )}
+        {!dicomReport && !imageReport && file && (
+          <p className="anon-ok">✓ Görüntü hazır; parmak izi hash&apos;i üretildi.</p>
         )}
       </div>
       )}

@@ -401,6 +401,134 @@ export async function cleanDicom(
 }
 
 // ---------------------------------------------------------------------------
+// PNG / JPEG meta veri (EXIF/XMP/ICC/text) temizleme
+// ---------------------------------------------------------------------------
+
+export interface ImageCleanReport {
+  format: "png" | "jpeg";
+  removedChunks: string[];
+}
+
+export function imageFormat(bytes: Uint8Array): "png" | "jpeg" | null {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 &&
+      bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return "png";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    return "jpeg";
+  }
+  return null;
+}
+
+function concatChunks(chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return out;
+}
+
+// Kimlik/meta veri taşıyabilen PNG yardımcı chunk'ları. Kritik chunk'lar
+// (IHDR/PLTE/IDAT/IEND) ve şeffaflık için gerekli tRNS korunur.
+const PNG_METADATA_CHUNKS = new Set(["tEXt", "zTXt", "iTXt", "eXIf", "tIME", "iCCP"]);
+
+function stripPngMetadata(bytes: Uint8Array): { out: Uint8Array; removed: string[] } {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const removed: string[] = [];
+  const out: Uint8Array[] = [bytes.subarray(0, 8)]; // 8 baytlık imza
+  let pos = 8;
+  while (pos + 8 <= bytes.length) {
+    const len = view.getUint32(pos, false); // big-endian
+    const type = String.fromCharCode(bytes[pos + 4], bytes[pos + 5], bytes[pos + 6], bytes[pos + 7]);
+    const end = pos + 12 + len; // length(4)+type(4)+data+crc(4)
+    if (end > bytes.length) {
+      out.push(bytes.subarray(pos)); // bozuk kuyruk: olduğu gibi koru
+      break;
+    }
+    if (PNG_METADATA_CHUNKS.has(type)) {
+      removed.push(type);
+    } else {
+      out.push(bytes.subarray(pos, end));
+    }
+    pos = end;
+    if (type === "IEND") break;
+  }
+  return { out: concatChunks(out), removed };
+}
+
+// Görüntüleme/renk için gereken APP0 (JFIF) ve APP14 (Adobe) korunur;
+// EXIF/XMP/IPTC/ICC ve yorum segmentleri kaldırılır. Piksel verisine
+// (SOS sonrası entropy-coded tarama) dokunulmaz.
+const JPEG_KEEP_APP = new Set([0xe0, 0xee]);
+
+function stripJpegMetadata(bytes: Uint8Array): { out: Uint8Array; removed: string[] } {
+  const removed: string[] = [];
+  const out: Uint8Array[] = [bytes.subarray(0, 2)]; // SOI
+  let pos = 2;
+  while (pos + 4 <= bytes.length) {
+    if (bytes[pos] !== 0xff) {
+      out.push(bytes.subarray(pos)); // dolgu/bozuk: kalanı koru
+      break;
+    }
+    const marker = bytes[pos + 1];
+    if (marker === 0xd9) {
+      out.push(bytes.subarray(pos, pos + 2)); // EOI
+      break;
+    }
+    if (marker === 0xda) {
+      // SOS: başlık + entropy-coded tarama verisinin tamamı korunur.
+      out.push(bytes.subarray(pos));
+      break;
+    }
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      out.push(bytes.subarray(pos, pos + 2)); // TEM / RSTn (uzunluk alanı yok)
+      pos += 2;
+      continue;
+    }
+    const len = (bytes[pos + 2] << 8) | bytes[pos + 3];
+    const end = pos + 2 + len;
+    if (len < 2 || end > bytes.length) {
+      out.push(bytes.subarray(pos));
+      break;
+    }
+    const isApp = marker >= 0xe0 && marker <= 0xef;
+    const isCom = marker === 0xfe;
+    if ((isApp && !JPEG_KEEP_APP.has(marker)) || isCom) {
+      removed.push(isApp ? `APP${marker - 0xe0}` : "COM");
+    } else {
+      out.push(bytes.subarray(pos, end));
+    }
+    pos = end;
+  }
+  return { out: concatChunks(out), removed };
+}
+
+/**
+ * PNG/JPEG meta verisini (EXIF/XMP/IPTC/ICC/text) istemcide temizler.
+ *
+ * ÖNEMLİ: Bu yalnızca dosya meta verisini kaldırır; görüntü üzerine basılmış
+ * (burned-in) yazıyı veya piksele gömülü kimliği TESPİT EDEMEZ. Yüksek riskli
+ * görüntülerde manuel doğrulama gerekir (bkz. docs/SINIRLAMALAR.md).
+ */
+export function cleanImageMetadata(
+  bytes: Uint8Array
+): { bytes: Uint8Array; report: ImageCleanReport } {
+  const fmt = imageFormat(bytes);
+  if (fmt === "png") {
+    const { out, removed } = stripPngMetadata(bytes);
+    return { bytes: out, report: { format: "png", removedChunks: removed } };
+  }
+  if (fmt === "jpeg") {
+    const { out, removed } = stripJpegMetadata(bytes);
+    return { bytes: out, report: { format: "jpeg", removedChunks: removed } };
+  }
+  throw new Error("Desteklenmeyen görüntü formatı (yalnız PNG/JPEG)");
+}
+
+// ---------------------------------------------------------------------------
 // WFDB .hea (EKG basligi) anonimlestirme — Python ecg_deid TS portu
 // ---------------------------------------------------------------------------
 
@@ -416,7 +544,7 @@ function ageBand(age: number): string {
   return `${lo}-${lo + 9}`;
 }
 
-/** WFDB .hea metnini istemcide KVKK uyumlu hale getirir. */
+/** WFDB .hea metnini istemcide PHI'siz hale getirir (kimlik alanları temizlenir). */
 export async function cleanHea(content: string, salt: string): Promise<{ text: string; report: HeaCleanReport }> {
   const lines = content.split(/\r?\n/);
   const report: HeaCleanReport = {

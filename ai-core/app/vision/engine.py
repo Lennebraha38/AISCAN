@@ -1,9 +1,23 @@
 """Görsel analiz motoru.
 
-Birincil yol: numpy tabanlı deterministik göğüs radyografisi özellik
-çıkarımı (offline çalışır, jüri demosunda tekrarlanabilir).
-Opsiyonel yol: torch checkpoint yüklüyse gerçek model çıkarımı
-(``scripts/train`` ile eğitilmiş ResNet50/ViT).
+Bu modülün VARSAYILAN ve birincil yolu, deterministik bir HEURISTIK özellik
+hattıdır: klasik görüntü işleme özellikleri (simetri/asimetri, opasite oranı,
+gradyan kenar enerjisi, kardiyotorasik oran vekili vb.) numpy ile hesaplanır
+ve elle kalibre edilmiş sigmoid kurallarıyla bulgu olasılıklarına çevrilir.
+Bu, EĞİTİLMİŞ bir klinik radyoloji modeli DEĞİLDİR: çıktılar tanı amaçlı
+değil, tekrarlanabilir demo/ön değerlendirme amaçlıdır ve aynı girdi her
+zaman aynı çıktıyı üretir (offline, deterministik).
+
+Opsiyonel yol: bir torch checkpoint (``scripts/train`` ile eğitilmiş
+ResNet50/ViT) mevcutsa gerçek model çıkarımı Grad-CAM ile
+``app/vision/cam.py`` üzerinden kullanılır. Checkpoint yoksa bu modül
+heuristik hatta düşer.
+
+Sonuç sözlüğü, hangi yolun kullanıldığını şeffaf biçimde bildiren
+``result["engine"]`` alanını taşır: varsayılan heuristik hat için
+``"heuristic-demo"``, eğitilmiş checkpoint ile çalışıldığında
+``"checkpoint:<path>"``. Bu alan katkı amaçlıdır (additive); mevcut
+anahtarlar korunur.
 """
 from __future__ import annotations
 
@@ -81,10 +95,14 @@ def _sigmoid(x: float, k: float = 10.0) -> float:
     return float(1.0 / (1.0 + np.exp(-k * x)))
 
 
-def analyze_array(img: np.ndarray) -> dict:
+def analyze_array(img: np.ndarray, engine: str | None = None) -> dict:
     """Gri seviye görüntüden bulgu olasılıkları ve risk skoru üretir.
 
-    Özellikler deterministiktir; aynı girdi her zaman aynı çıktıyı verir.
+    Heuristik (eğitilmemiş) klasik özellik hattıdır; özellikler
+    deterministiktir ve aynı girdi her zaman aynı çıktıyı verir. ``engine``
+    verilmezse sonuç ``engine="heuristic-demo"`` olur; eğitilmiş bir
+    checkpoint kullanılıyorsa çağıran taraf ``engine="checkpoint:<path>"``
+    geçebilir (yalnızca etiketleme amaçlı, davranış değişmez).
     """
     h, w = img.shape
     mid = w // 2
@@ -192,17 +210,23 @@ def analyze_array(img: np.ndarray) -> dict:
             {"row": rg.row, "col": rg.col, "energy": round(rg.energy, 4)}
             for rg in regions[:3]
         ],
+        # Şeffaflık: hangi motorun ürettiğini bildirir (additive alan).
+        "engine": engine or "heuristic-demo",
     }
 
 
-def analyze_image(image_bytes: bytes, modality: str = "CR") -> dict:
-    """Görüntü byte'larını analiz eder; CT ise HU pencereleme uygular."""
+def analyze_image(image_bytes: bytes, modality: str = "CR",
+                  engine: str | None = None) -> dict:
+    """Görüntü byte'larını analiz eder; CT ise HU pencereleme uygular.
+
+    Varsayılan olarak heuristik hattı kullanır (``engine="heuristic-demo"``).
+    """
     img = load_grayscale(image_bytes)
     if modality and modality.upper().startswith("CT") and image_bytes[:2] in (b"\xff\xd8", b"\x89P"):
         # PNG/JPEG girdide piksel değerleri zaten normalize; pencereleme
         # yalnız ham DICOM piksel dizisi verildiğinde anlamlıdır.
         img = hu_window(img * 255.0 - 1000.0)
-    return analyze_array(img)
+    return analyze_array(img, engine=engine)
 
 
 def finding_saliency_map(img: np.ndarray, label: str) -> np.ndarray:

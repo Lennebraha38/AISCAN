@@ -31,7 +31,7 @@ export default function LoginPage() {
       <div className="card">
         <h1 style={{ marginTop: 0 }}>Pulsar-KKDS Giriş</h1>
         <p style={{ color: "#66708a", fontSize: 14 }}>
-          KVKK uyumlu klinik karar destek platformu
+          KVKK ilkeleri gözetilerek tasarlanmış klinik karar destek prototipi
         </p>
         <form onSubmit={onSubmit}>
           <input

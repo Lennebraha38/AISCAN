@@ -12,14 +12,22 @@ class LoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
+    """Erişim token'ı gövdede döner; refresh token ARTIK gövdede dönmez.
+
+    Refresh token yalnızca HttpOnly + Secure + SameSite çerezde taşınır
+    (XSS ile uzun ömürlü oturum token'ı çalınmasını zorlaştırır).
+    """
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
     role: str
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    """Geriye dönük uyumluluk: refresh token gövdeden de gönderilebilir.
+
+    Birincil yol `pulsar_refresh` HttpOnly çerezidir; gövde alanı opsiyoneldir.
+    """
+    refresh_token: str | None = None
 
 
 class UserCreateRequest(BaseModel):

@@ -1,9 +1,14 @@
 # MDR (EU 2017/745) SaMD Sınıflandırma Beyanı — Pulsar-KKDS
 
+> Bu belge, projenin **hedeflediği** düzenleyici konumu açıklar. Pulsar-KKDS
+> onaylanmış bir tıbbi cihaz **değildir**; SaMD hedefli bir **karar destek
+> prototipidir**. Klinik kanıt ve anonimleştirme sınırları için bkz.
+> [SINIRLAMALAR.md](SINIRLAMALAR.md).
+
 ## 1. Sınıflandırma
 
 Pulsar-KKDS, Tıbbi Cihaz Yönetmeliği (MDR) kapsamında **Software as a Medical
-Device (SaMD)** olarak değerlendirilir:
+Device (SaMD)** hedefiyle geliştirilmiş bir karar destek prototipidir:
 
 - **Amaç:** Radyolojik görüntü ve epikriz metninden **karar destek** sağlamak
   (risk skorlaması, ön bulgu listesi, benzer vaka önerisi).
@@ -11,8 +16,9 @@ Device (SaMD)** olarak değerlendirilir:
   tedavi kararını **tek başına vermez**; klinik kararın **girdisini** sunar.
   Çıktı, hekim tarafından doğrulanmadan hiçbir klinik süreçte kesinleşmez.
 - **Sonuç:** Karar destek amacı ve human-in-the-loop kontrolü ile sınıf
-  IIa altı konumlandırma; nihai sınıflandırma uygunluk değerlendirmesi kuruluşuna
-  tabidir.
+  IIa altı **hedeflenir**; bu bir iddia/plan beyanıdır ve nihai sınıflandırma
+  yalnızca yetkili bir uygunluk değerlendirmesi kuruluşu tarafından yapılabilir.
+  Bu depo hiçbir düzenleyici onay taşımaz.
 
 ## 2. Human-in-the-Loop Kontrol Mimarisi
 
@@ -28,8 +34,8 @@ Device (SaMD)** olarak değerlendirilir:
 
 1. Arayüzde "teşhis" ifadesi kullanılmaz; "ön bulgu", "risk skoru", "hekim
    değerlendirmesi önerilir" dili kullanılır.
-2. Tüm sayfalarda kalıcı uyarı bandı: *"Bu sistem bir Karar Destek
-   Sistemidir (SaMD). Nihai klinik karar hekim sorumluluğundadır."*
+2. Tüm sayfalarda kalıcı uyarı bandı: *"Bu sistem SaMD hedefli bir Karar Destek
+   Prototipidir. Nihai klinik karar hekim sorumluluğundadır."*
 3. AI çıktıları her zaman açıklanabilirlik verisiyle (Grad-CAM ısı haritası,
    token attribution, gerekçe metni) birlikte sunulur — hekim körü körüne
    onaylamaz.

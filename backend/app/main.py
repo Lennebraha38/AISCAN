@@ -1,7 +1,8 @@
 """Pulsar-KKDS SaaS API.
 
-MDR (EU 2017/745) notu: bu servis bir Karar Destek Sistemi (SaMD)
-backend'idir; AI çıktısı hekim onayı olmadan kesinleşmez.
+MDR (EU 2017/745) notu: bu servis SaMD hedefli bir karar destek prototipinin
+backend'idir; AI cikitisi hekim onayi olmadan kesinlesmez. Onaylanmis bir
+tibbi cihaz degildir (bkz. docs/SINIRLAMALAR.md).
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from datetime import datetime, timezone, timedelta
 app = FastAPI(
     title=settings.app_name,
     version="0.2.0",
-    description="KVKK uyumlu multimodal tıbbi karar destek platformu",
+    description="KVKK ilkeleri gozetilerek tasarlanmis, SaMD hedefli multimodal karar destek prototipi",
 )
 
 app.add_middleware(

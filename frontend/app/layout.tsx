@@ -4,7 +4,7 @@ import { NotificationProvider } from "../lib/notifications";
 
 export const metadata: Metadata = {
   title: "Pulsar-KKDS",
-  description: "KVKK uyumlu multimodal tibbi karar destek platformu (SaMD)",
+  description: "SaMD hedefli, KVKK ilkeleri gozetilerek tasarlanmis karar destek prototipi",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -13,8 +13,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         <NotificationProvider>
           <div className="samd-band">
-            Bu sistem bir <strong>Karar Destek Sistemidir (SaMD)</strong>. Nihai klinik karar hekim
-            sorumlulugundadir.
+            Bu sistem <strong>SaMD hedefli bir Karar Destek Prototipidir</strong>; onaylanmis bir
+            tibbi cihaz degildir. Nihai klinik karar hekim sorumlulugundadir.
           </div>
           {children}
         </NotificationProvider>

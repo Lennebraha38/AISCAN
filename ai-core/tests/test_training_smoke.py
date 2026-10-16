@@ -57,6 +57,39 @@ def test_load_cache_roundtrip(synth):
     assert set(np.unique(y).tolist()) == set(range(n_classes))
 
 
+def _assert_honest_reporting(res: dict) -> None:
+    """Yeni dürüst değerlendirme anahtarlarının varlığını ve biçimini doğrular."""
+    # per_class: her sınıf için tam olarak bir giriş + beklenen alanlar.
+    per_class = res["per_class"]
+    assert set(per_class) == set(T.CLASS_NAMES)
+    for name, m in per_class.items():
+        assert {"precision", "recall", "f1", "support",
+                "recall_ci95", "precision_ci95"} <= set(m)
+        assert 0.0 <= m["precision"] <= 1.0
+        assert 0.0 <= m["recall"] <= 1.0
+        assert 0.0 <= m["f1"] <= 1.0
+        assert m["support"] >= 0
+        for ci_key in ("recall_ci95", "precision_ci95"):
+            lo, hi = m[ci_key]
+            assert 0.0 <= lo <= hi <= 1.0
+
+    # error_analysis: yanlış sınıflandırılan kayıtlar (id + gerçek/tahmin).
+    assert isinstance(res["error_analysis"], list)
+    assert len(res["error_analysis"]) <= 50  # cap
+    for e in res["error_analysis"]:
+        assert {"id", "true", "pred"} <= set(e)
+        assert e["true"] != e["pred"]
+        assert e["true"] in T.CLASS_NAMES and e["pred"] in T.CLASS_NAMES
+
+    # split: held-out TEST seti deterministik/traceable olarak belgelenir.
+    split = res["split"]
+    assert split["scheme"] == "record/patient-based stratified"
+    assert isinstance(split["seed"], int)
+    assert split["n_train"] > 0 and split["n_val"] > 0 and split["n_test"] > 0
+    # per_class destek toplamı test örnek sayısına eşit olmalı.
+    assert sum(m["support"] for m in per_class.values()) == split["n_test"]
+
+
 def test_baseline_smoke(synth):
     data_dir, tmp = synth
     out = tmp / "metrics"
@@ -64,6 +97,9 @@ def test_baseline_smoke(synth):
     res = json.loads((out / "baseline_metrics.json").read_text())
     assert 0.0 <= res["macro_f1"] <= 1.0
     assert len(res["confusion_matrix"]) == len(T.SUPERCLASSES)
+    # Eski anahtarlar korunur (kaldırma/yeniden adlandırma yok).
+    assert {"model", "macro_f1", "bias", "report", "confusion_matrix"} <= set(res)
+    _assert_honest_reporting(res)
 
 
 def test_deep_and_robustness_smoke(synth):
@@ -83,6 +119,11 @@ def test_deep_and_robustness_smoke(synth):
         assert key in deep
     # CV tablosu folds=2 için fold_1/fold_2 + ortalama/std içermeli.
     assert {"fold_1", "fold_2", "mean", "std"} <= set(deep["fold_eval"])
+    # Yeni dürüst raporlama anahtarları (mevcut anahtarlar korunur).
+    assert {"report", "confusion_matrix", "per_class",
+            "error_analysis", "split"} <= set(deep)
+    _assert_honest_reporting(deep)
+    assert deep["split"]["seed"] == T.CFG["cv"]["random_state"]
 
     T.run_robustness(data_dir, models, out)
     rob = json.loads((out / "robustness_metrics.json").read_text())

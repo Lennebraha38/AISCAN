@@ -19,6 +19,10 @@ Coklu etiket kurali (belgeli tasarim karari):
 
 Hedef disi kodlar (MI, LVH, STTC vb.) tek baslarina kaydi eler;
 ancak kayitta SR varsa ve hedef kod yoksa kayit "normal" sinifina girer.
+
+Not: Bu haritalama tamamen deterministik ve KURAL tabanlidir (ogrenilmis bir
+model degildir); kod listesi -> ust sinif donusumu elle tanimli kod kumeleri
+(ARRHYTHMIA/BLOCK/NORMAL_CODES) ile yapilir.
 """
 
 from __future__ import annotations

@@ -1,9 +1,10 @@
 """Kimlik doğrulama endpoint'leri."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
+from ...core.config import settings
 from ...core.deps import client_ip, get_current_user, get_db
 from ...core.ratelimit import rate_limit
 from ...core.security import (
@@ -26,9 +27,31 @@ from ...services.audit import write_audit
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
+# Refresh token yalnizca bu HttpOnly cerezde tasinir; govdede/JS'te tutulmaz.
+REFRESH_COOKIE = "pulsar_refresh"
+REFRESH_COOKIE_PATH = "/v1/auth"
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    """Refresh token'i HttpOnly + Secure + SameSite cerez olarak yazar."""
+    response.set_cookie(
+        key=REFRESH_COOKIE,
+        value=token,
+        max_age=settings.refresh_token_days * 24 * 3600,
+        path=REFRESH_COOKIE_PATH,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.cookie_samesite,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(REFRESH_COOKIE, path=REFRESH_COOKIE_PATH)
+
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
+def login(payload: LoginRequest, request: Request, response: Response,
+          db: Session = Depends(get_db)) -> TokenResponse:
     # Brute-force koruması (IP başına dakikada 30 deneme).
     rate_limit(request, "login", 30, 60)
     user = db.query(User).filter(User.email == payload.email.lower().strip()).first()
@@ -36,19 +59,27 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         write_audit(db, user_id=None, action="LOGIN_FAILED", entity_type="user",
                     entity_id=payload.email[:32], ip=client_ip(request))
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "E-posta veya şifre hatalı")
-    tokens = TokenResponse(
-        access_token=create_access_token(user.id, user.role, user.token_version),
-        refresh_token=create_refresh_token(user.id, user.role, user.token_version),
-        role=user.role,
-    )
+    _set_refresh_cookie(response, create_refresh_token(user.id, user.role, user.token_version))
     write_audit(db, user_id=user.id, action="LOGIN", entity_type="user",
                 entity_id=user.id, ip=client_ip(request))
-    return tokens
+    return TokenResponse(
+        access_token=create_access_token(user.id, user.role, user.token_version),
+        role=user.role,
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse)
-def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenResponse:
-    claims = decode_token(payload.refresh_token)
+def refresh(request: Request, response: Response,
+            payload: RefreshRequest | None = None,
+            db: Session = Depends(get_db)) -> TokenResponse:
+    """Erişim token'ını yeniler.
+
+    Refresh token birincil olarak `pulsar_refresh` HttpOnly çerezinden okunur;
+    geriye dönük uyumluluk için gövdeden de kabul edilir. Her yenilemede token
+    döndürülür (rotation): yeni refresh token yine çereze yazılır.
+    """
+    token = request.cookies.get(REFRESH_COOKIE) or (payload.refresh_token if payload else None)
+    claims = decode_token(token) if token else None
     if not claims or claims.get("type") != "refresh":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Geçersiz refresh token")
     user = db.get(User, claims["sub"])
@@ -56,11 +87,18 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenResp
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Kullanıcı bulunamadı")
     if int(claims.get("tv", 0)) != int(getattr(user, "token_version", 0) or 0):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token geçersiz kılınmış")
+    _set_refresh_cookie(response, create_refresh_token(user.id, user.role, user.token_version))
     return TokenResponse(
         access_token=create_access_token(user.id, user.role, user.token_version),
-        refresh_token=create_refresh_token(user.id, user.role, user.token_version),
         role=user.role,
     )
+
+
+@router.post("/logout", status_code=200)
+def logout(response: Response) -> dict:
+    """Refresh çerezini temizler (istemci tarafı token'ı da silmelidir)."""
+    _clear_refresh_cookie(response)
+    return {"status": "ok"}
 
 
 @router.get("/me", response_model=UserOut)

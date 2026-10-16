@@ -68,8 +68,13 @@ export default function DashboardPage() {
         </span>
         <a
           href="#"
-          onClick={(e) => {
+          onClick={async (e) => {
             e.preventDefault();
+            try {
+              await api.logout();
+            } catch {
+              /* çerez zaten temizlenmiş olabilir */
+            }
             clearTokens();
             window.location.href = "/login";
           }}

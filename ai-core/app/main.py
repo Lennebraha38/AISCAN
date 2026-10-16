@@ -134,7 +134,10 @@ async def vision_analyze(
     data = await image.read()
     _validate_upload(image, data)
 
-    result = analyze_image(data, modality=modality)
+    # Dürüstlük: eğitilmiş checkpoint yüklüyse "checkpoint", aksi halde
+    # "heuristic-demo" (eğitilmemiş klasik özellik hattı).
+    engine_label = "checkpoint" if _MODEL_HOLDER["model"] else "heuristic-demo"
+    result = analyze_image(data, modality=modality, engine=engine_label)
 
     # Her bulgu KENDI mekânsal imzasindan uretilmis ayri overlay tasiyor;
     # backend bunlari DB'de saklar, API yanitlarindan soyar ve /cam ile
@@ -159,6 +162,7 @@ async def vision_analyze(
         xai_method="grad-cam" if _MODEL_HOLDER["model"] else "finding-saliency (bulgu-bazlı)",
         base_image_b64=render_base_image(data, modality=modality),
         modality=modality,
+        engine=result.get("engine"),
     )
 
 

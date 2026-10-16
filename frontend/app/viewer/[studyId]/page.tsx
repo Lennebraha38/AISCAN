@@ -345,6 +345,12 @@ export default function ViewerPage() {
           )}
 
           <h4 style={{ marginBottom: 6 }}>Bulgu Listesi</h4>
+          {vision && !String(vision.engine || "").startsWith("checkpoint") && (
+            <p style={{ color: "#8a93ab", fontSize: 12, margin: "0 0 8px" }}>
+              Uyarı: Görüntü bulguları deneysel bir <strong>demo heuristiğiyle</strong>{" "}
+              üretilir; eğitilmiş bir klinik radyoloji modeli değildir.
+            </p>
+          )}
           <table className="list">
             <thead>
               <tr><th>Bulgu</th><th>Olasilik</th></tr>
@@ -380,6 +386,9 @@ export default function ViewerPage() {
         <div style={{ flex: 1, minWidth: 320 }}>
           <div className="card">
             <h3>Epikriz Analizi (Metin XAI)</h3>
+            <p style={{ color: "#8a93ab", fontSize: 12, marginTop: -6 }}>
+              Kural/sezgisel Türkçe analiz (demo); eğitilmiş klinik NLP modeli değildir.
+            </p>
             {nlp ? (
               <>
                 <p>

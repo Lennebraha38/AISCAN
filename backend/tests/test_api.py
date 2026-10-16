@@ -227,11 +227,16 @@ def test_password_change_invalidates_old_tokens(client):
     admin = _admin_headers(client)
     _create_user(client, admin, "pwuser@test.demo", "test-pass-123", "hekim")
 
-    tokens = client.post("/v1/auth/login",
-                         json={"email": "pwuser@test.demo", "password": "test-pass-123"}).json()
-    old_access = {"Authorization": f"Bearer {tokens['access_token']}"}
-    old_refresh = tokens["refresh_token"]
+    r = client.post("/v1/auth/login",
+                    json={"email": "pwuser@test.demo", "password": "test-pass-123"})
+    body = r.json()
+    old_access = {"Authorization": f"Bearer {body['access_token']}"}
+    # Refresh token GÖVDEDE dönmez; HttpOnly çerezde taşınır.
+    assert "refresh_token" not in body
+    assert client.cookies.get("pulsar_refresh")
     assert client.get("/v1/auth/me", headers=old_access).status_code == 200
+    # Çerezdeki refresh token ile erişim token'ı yenilenebilir (rotation).
+    assert client.post("/v1/auth/refresh").status_code == 200
 
     ch = client.post("/v1/auth/password",
                      json={"current_password": "test-pass-123", "new_password": "yeni-parola-456"},
@@ -240,11 +245,43 @@ def test_password_change_invalidates_old_tokens(client):
 
     # Eski token'lar artık geçersiz kılınmış.
     assert client.get("/v1/auth/me", headers=old_access).status_code == 401
-    assert client.post("/v1/auth/refresh",
-                       json={"refresh_token": old_refresh}).status_code == 401
+    assert client.post("/v1/auth/refresh").status_code == 401
     # Yeni şifreyle giriş çalışır.
     assert client.post("/v1/auth/login",
                        json={"email": "pwuser@test.demo", "password": "yeni-parola-456"}).status_code == 200
+
+
+def test_refresh_cookie_is_httponly_and_logout_clears_it(client):
+    """Refresh token HttpOnly çerezde taşınır; logout çerezi temizler."""
+    r = client.post("/v1/auth/login",
+                    json={"email": "hekim@test.demo", "password": "test-pass-123"})
+    assert r.status_code == 200
+    assert "refresh_token" not in r.json()  # gövdeye sızmaz
+    set_cookie = r.headers.get("set-cookie", "")
+    assert "pulsar_refresh=" in set_cookie
+    assert "HttpOnly" in set_cookie
+
+    out = client.post("/v1/auth/logout")
+    assert out.status_code == 200
+    assert "pulsar_refresh=" in out.headers.get("set-cookie", "")
+    # Çerez temizlendikten sonra refresh başarısız olur.
+    assert client.post("/v1/auth/refresh").status_code == 401
+
+
+def test_refresh_accepts_body_token_for_backward_compat(client):
+    """Geriye dönük uyumluluk: refresh token gövdeden de kabul edilir."""
+    from app.core.security import create_refresh_token
+    from sqlalchemy.orm import sessionmaker
+
+    db = sessionmaker(bind=engine)()
+    try:
+        user = db.query(User).filter(User.email == "hekim@test.demo").first()
+        token = create_refresh_token(user.id, user.role, user.token_version or 0)
+    finally:
+        db.close()
+    r = client.post("/v1/auth/refresh", json={"refresh_token": token})
+    assert r.status_code == 200, r.text
+    assert "access_token" in r.json() and "refresh_token" not in r.json()
 
 
 def test_rate_limit_raises_429_after_limit():

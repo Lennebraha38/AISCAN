@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 import pydicom
 from pydicom.dataset import Dataset
+from pydicom.sequence import Sequence
 from pydicom.tag import Tag
 from pydicom.uid import ImplicitVRLittleEndian
 
@@ -93,10 +94,23 @@ def _pseudonym(value: str, salt: str) -> str:
     return hashlib.sha256((salt + value).encode("utf-8")).hexdigest()[:16]
 
 
-def clean_dicom_dataset(ds: Dataset, salt: str | None = None) -> tuple[Dataset, CleanReport]:
-    """Dataset üzerindeki PHI tag'lerini yerinde temizler."""
-    salt = _resolve_salt(salt)
-    report = CleanReport()
+def _nested_datasets(value: object) -> list[Dataset]:
+    """Bir element değerinin içerdiği alt Dataset'leri döndür.
+
+    Sequences (tanımlı veya tanımsız uzunluk/encapsulated olsun) pydicom
+    tarafından okunurken ``Sequence`` nesnesine çözümlenir; her item bir
+    ``Dataset``'tir. Tek başına ``Dataset`` taşıyan elementler de desteklenir.
+    """
+    if isinstance(value, Sequence):
+        return [item for item in value if isinstance(item, Dataset)]
+    if isinstance(value, Dataset):
+        return [value]
+    return []
+
+
+def _clean_dataset_recursive(ds: Dataset, salt: str, report: CleanReport) -> None:
+    """Bir Dataset'i ve içindeki TÜM iç içe sequence'leri yerinde temizler."""
+    # 1) PHI tag haritası (remove / hash / keep_or_remove) bu seviyede uygula.
     for tag, (keyword, action) in PHI_TAGS.items():
         if tag not in ds:
             continue
@@ -118,17 +132,37 @@ def clean_dicom_dataset(ds: Dataset, salt: str | None = None) -> tuple[Dataset, 
             if has_value:
                 report.removed.append(keyword)
 
-    # Özel (private) tag'ler üretici tanımlı olabilir -> tamamen kaldır.
-    private_elems = [t for t in ds.keys() if t.is_private]
-    report.private_removed = len(private_elems)
-    for t in private_elems:
-        del ds[t]
-
-    # Değer taraması: bilinen keyword'lerde kalan dolu alanları boşalt.
+    # 2) Değer taraması: bilinen keyword'lerde kalan dolu alanları boşalt.
     for elem in list(ds):
         if elem.keyword in VALUE_SCAN_KEYWORDS and elem.value:
             del ds[elem.tag]
             report.removed.append(elem.keyword)
+
+    # 3) İç içe sequence'lere in (private tag'ler 4. adımda tümüyle kaldırılır;
+    #    onların altındaki veriyi işlemeye gerek yoktur).
+    for elem in list(ds):
+        if elem.tag.is_private:
+            continue
+        for child in _nested_datasets(elem.value):
+            _clean_dataset_recursive(child, salt, report)
+
+    # 4) Özel (private) tag'ler üretici tanımlı olabilir -> her seviyede
+    #    tamamen kaldır. Private bir sequence ise alt ağacıyla birlikte gider.
+    private_elems = [t for t in ds.keys() if t.is_private]
+    report.private_removed += len(private_elems)
+    for t in private_elems:
+        del ds[t]
+
+
+def clean_dicom_dataset(ds: Dataset, salt: str | None = None) -> tuple[Dataset, CleanReport]:
+    """Dataset üzerindeki PHI tag'lerini yerinde ve özyinelemeli temizler.
+
+    Üst seviyeye ek olarak, her derinlikteki iç içe ``Sequence`` item'ları da
+    aynı PHI tag haritası ve private-tag kaldırma kurallarıyla temizlenir.
+    """
+    salt = _resolve_salt(salt)
+    report = CleanReport()
+    _clean_dataset_recursive(ds, salt, report)
     return ds, report
 
 
@@ -148,21 +182,38 @@ def clean_dicom_bytes(data: bytes, salt: str | None = None) -> tuple[bytes, dict
     return buf.getvalue(), report.to_dict()
 
 
-def scan_for_phi(data: bytes, include_pseudonyms: bool = False) -> list[str]:
-    """Anonimleştirme sonrası doğrulama.
+def _scan_dataset_recursive(ds: Dataset, include_pseudonyms: bool, leaked: list[str]) -> None:
+    """Bir Dataset'i tarar ve iç içe sequence'lere özyinelemeli olarak iner.
 
-    Varsayılan olarak yalnız 'remove' aksiyonlu tag'lerde kalan değerleri
-    raporlar; SHA256 pseudonym'ler (hash aksiyonu) KVKK açısından kabul
-    edilebilir olduğundan leak sayılmaz.
+    ``clean_dicom_dataset`` ile AYNI gezinme mantığını kullanır; böylece
+    yalnızca üst seviyedeki değil, her derinlikteki PHI de yakalanır.
     """
-    ds = pydicom.dcmread(io.BytesIO(data), force=True)
-    leaked = []
     for tag, (keyword, action) in PHI_TAGS.items():
         if action == "hash" and not include_pseudonyms:
             continue
         if tag in ds and ds.get(tag) not in (None, "", b""):
             leaked.append(keyword)
+
     for elem in ds:
+        if elem.tag.is_private:
+            # Private tag'ler üretici tanımlı olabilir ve PHI içerebilir.
+            leaked.append("PrivateTag")
+            continue
         if elem.keyword in VALUE_SCAN_KEYWORDS and elem.value:
             leaked.append(elem.keyword)
+        for child in _nested_datasets(elem.value):
+            _scan_dataset_recursive(child, include_pseudonyms, leaked)
+
+
+def scan_for_phi(data: bytes, include_pseudonyms: bool = False) -> list[str]:
+    """Anonimleştirme sonrası doğrulama (özyinelemeli).
+
+    Varsayılan olarak yalnız 'remove' aksiyonlu tag'lerde kalan değerleri
+    raporlar; SHA256 pseudonym'ler (hash aksiyonu) KVKK açısından kabul
+    edilebilir olduğundan leak sayılmaz. İç içe sequence'lerdeki PHI ve
+    kalan private tag'ler de tespit edilir.
+    """
+    ds = pydicom.dcmread(io.BytesIO(data), force=True)
+    leaked: list[str] = []
+    _scan_dataset_recursive(ds, include_pseudonyms, leaked)
     return sorted(set(leaked))

@@ -4,7 +4,6 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 
 export interface Tokens {
   access_token: string;
-  refresh_token: string;
   role: string;
 }
 
@@ -15,10 +14,13 @@ export function getTokens(): Tokens | null {
 }
 
 export function setTokens(tokens: Tokens): void {
+  // Yalnızca kısa ömürlü access token saklanır. Refresh token ARTIK burada
+  // tutulmaz; HttpOnly + Secure + SameSite çerezde taşınır (XSS ile uzun
+  // ömürlü oturum token'ı çalınmasını zorlaştırır).
   localStorage.setItem("pulsar_tokens", JSON.stringify(tokens));
-  // Middleware'in okuyabilmesi için işaret çerezi. HttpOnly sunucu tarafından
-  // set edilemediğinden JS yazar; yine de Secure + SameSite=Strict eklenir
-  // (HTTPS'te çerez yalnız şifreli kanaldan gider).
+  // Middleware'in okuyabilmesi için işaret çerezi. Bu yalnızca bir bayraktır
+  // (token değeri taşımaz); HttpOnly sunucu tarafından set edilemediğinden JS
+  // yazar; yine de Secure + SameSite=Strict eklenir.
   const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; secure" : "";
   document.cookie = `pulsar_auth=1; path=/; max-age=86400; samesite=strict${secure}`;
 }
@@ -29,7 +31,7 @@ export function clearTokens(): void {
   document.cookie = `pulsar_auth=; path=/; max-age=0; samesite=strict${secure}`;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, allowRefresh = true): Promise<T> {
   const tokens = getTokens();
   const headers = new Headers(init.headers);
   if (tokens) headers.set("Authorization", `Bearer ${tokens.access_token}`);
@@ -38,15 +40,26 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   let resp: Response;
   try {
-    resp = await fetch(`${API_URL}${path}`, { ...init, headers });
+    // credentials: "include" → HttpOnly refresh çerezi gönderilir/alınır.
+    resp = await fetch(`${API_URL}${path}`, { ...init, headers, credentials: "include" });
   } catch {
     throw new Error(
       `Sunucuya ulaşılamıyor (${API_URL}). Bağlantıyı ve servis durumunu kontrol edin.`
     );
   }
-  if (resp.status === 401 && path !== "/v1/auth/login") {
+  if (
+    resp.status === 401 &&
+    allowRefresh &&
+    path !== "/v1/auth/login" &&
+    path !== "/v1/auth/refresh"
+  ) {
+    // Kısa ömürlü access token süresi dolmuş olabilir: refresh çereziyle bir
+    // kez yenile, sonra isteği tekrarla. Başarısızsa oturumu kapat.
+    if (await tryRefresh()) {
+      return request<T>(path, init, false);
+    }
     clearTokens();
-    window.location.href = "/login";
+    if (typeof window !== "undefined") window.location.href = "/login";
     throw new Error("Oturum süresi doldu");
   }
   if (!resp.ok) {
@@ -65,12 +78,39 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
+let refreshInFlight: Promise<boolean> | null = null;
+
+/** HttpOnly çerezdeki refresh token ile access token'ı yeniler. */
+function tryRefresh(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        const r = await fetch(`${API_URL}/v1/auth/refresh`, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (!r.ok) return false;
+        const data = (await r.json()) as { access_token: string; role?: string };
+        const current = getTokens();
+        setTokens({ access_token: data.access_token, role: data.role ?? current?.role ?? "" });
+        return true;
+      } catch {
+        return false;
+      }
+    })().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
 export const api = {
   login: (email: string, password: string) =>
     request<Tokens>("/v1/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
+  logout: () => request<{ status: string }>("/v1/auth/logout", { method: "POST" }),
   me: () => request<{ id: string; email: string; role: string }>("/v1/auth/me"),
   listStudies: () =>
     request<
@@ -145,6 +185,7 @@ export const api = {
     const tokens = getTokens();
     return fetch(`${API_URL}/v1/analyses/${id}/patient.pdf`, {
       headers: tokens ? { Authorization: `Bearer ${tokens.access_token}` } : {},
+      credentials: "include",
     }).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); });
   },
   secondOpinion: (id: string, note: string) =>
@@ -172,6 +213,8 @@ export interface VisionResult {
   risk_score: number;
   features: Record<string, number>;
   xai_method: string;
+  /** Dürüstlük etiketi: "heuristic-demo" (eğitilmemiş) veya "checkpoint". */
+  engine?: string | null;
 }
 
 export interface HighlightedToken {

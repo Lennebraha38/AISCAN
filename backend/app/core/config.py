@@ -117,6 +117,9 @@ class Settings:
     # Yalnizca guvenilir bir reverse proxy arkasinda True yapin; aksi halde
     # X-Forwarded-For basligi spoof edilerek audit IP'si sahtelenebilir.
     trust_forwarded_for: bool = _env_bool("TRUST_FORWARDED_FOR", False)
+    # Refresh token HttpOnly cerez ayari. Bos ise ortama gore turetilir:
+    # dev -> samesite=lax & secure=False; uretim -> samesite=none & secure=True.
+    refresh_cookie_samesite: str = getenv("COOKIE_SAMESITE", "").strip().lower()
     cors_origins: list[str] = field(
         default_factory=lambda: _parse_cors_origins()
     )
@@ -124,6 +127,17 @@ class Settings:
     @property
     def is_development(self) -> bool:
         return self.environment in _DEV_ENVS
+
+    @property
+    def cookie_samesite(self) -> str:
+        if self.refresh_cookie_samesite:
+            return self.refresh_cookie_samesite
+        return "lax" if self.is_development else "none"
+
+    @property
+    def cookie_secure(self) -> bool:
+        # SameSite=None, tarayicilar tarafindan yalniz Secure ile kabul edilir.
+        return (not self.is_development) or self.cookie_samesite == "none"
 
     def getenv(self, name: str) -> str | None:
         return getenv(name)

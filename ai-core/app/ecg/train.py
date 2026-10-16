@@ -242,6 +242,82 @@ def _macro_f1(probs: np.ndarray, y: np.ndarray, bias: np.ndarray) -> float:
     return float(f1_score(y, _pred_with_bias(probs, bias), average="macro"))
 
 
+# ----------------------------------------------------- metrik yardimcilari ----
+def wilson_ci95(k: int, n: int, z: float = 1.96) -> list[float]:
+    """Wilson skor araligi (yerel, ek bagimlilik yok).
+
+    Ikili bir oran icin (k basari / n deneme) %95 Wilson skor guven araligi
+    dondurur; degerler [0, 1] araligina kisilir. n <= 0 ise [0.0, 0.0] doner
+    (tanimsiz oran icin guvenli varsayilan).
+    """
+    if n <= 0:
+        return [0.0, 0.0]
+    p = k / n
+    denom = 1.0 + z * z / n
+    center = (p + z * z / (2.0 * n)) / denom
+    margin = (z * np.sqrt(p * (1.0 - p) / n + z * z / (4.0 * n * n))) / denom
+    lo = min(max(center - margin, 0.0), 1.0)
+    hi = min(max(center + margin, 0.0), 1.0)
+    return [round(float(lo), 4), round(float(hi), 4)]
+
+
+def per_class_metrics(y_true: np.ndarray, y_pred: np.ndarray,
+                      class_names: tuple[str, ...] | list[str]) -> dict:
+    """TEST seti icin sinif bazli precision/recall/F1 + Wilson GA.
+
+    Her sinif icin: precision/recall/f1/support ve recall ile precision
+    oranlarinin %95 Wilson skor guven araliklari. Recall GA'da basari sayisi
+    gercek pozitif (TP), deneme sayisi sinifin gercek destegi (support);
+    precision GA'da ise TP / tahmin edilen pozitif sayisi.
+    """
+    from sklearn.metrics import precision_recall_fscore_support
+
+    n_classes = len(class_names)
+    p, r, f, s = precision_recall_fscore_support(
+        y_true, y_pred, labels=list(range(n_classes)), zero_division=0)
+    out: dict[str, dict] = {}
+    for i, name in enumerate(class_names):
+        tp = int(np.sum((y_true == i) & (y_pred == i)))
+        n_true = int(np.sum(y_true == i))
+        n_pred = int(np.sum(y_pred == i))
+        out[str(name)] = {
+            "precision": round(float(p[i]), 4),
+            "recall": round(float(r[i]), 4),
+            "f1": round(float(f[i]), 4),
+            "support": int(s[i]),
+            "recall_ci95": wilson_ci95(tp, n_true),
+            "precision_ci95": wilson_ci95(tp, n_pred),
+        }
+    return out
+
+
+def error_analysis(ids: list[str], y_true: np.ndarray, y_pred: np.ndarray,
+                   class_names: tuple[str, ...] | list[str],
+                   cap: int = 50) -> list[dict]:
+    """Yanlis siniflandirilan TEST kayitlari (kayit id + gercek/tahmin sinif).
+
+    cok uzun listeleri sinirlamak icin `cap` kayitta kesilir.
+    """
+    out: list[dict] = []
+    for i, (t, pr) in enumerate(zip(y_true, y_pred)):
+        if int(t) != int(pr):
+            out.append({"id": str(ids[i]),
+                        "true": str(class_names[int(t)]),
+                        "pred": str(class_names[int(pr)])})
+            if len(out) >= cap:
+                break
+    return out
+
+
+def split_meta(seed: int, n_train: int, n_val: int, n_test: int) -> dict:
+    """Held-out TEST setinin sabit ve deterministik oldugunu belgeleyen meta."""
+    return {"scheme": "record/patient-based stratified",
+            "seed": int(seed),
+            "n_train": int(n_train),
+            "n_val": int(n_val),
+            "n_test": int(n_test)}
+
+
 def tune_bias(val_probs: np.ndarray, val_y: np.ndarray,
               rounds: int = 4, span: float = 1.6, steps: int = 41) -> np.ndarray:
     """Sinif-bazli logit bias'ini val setinde macro F1'i maksimize edecek sekilde ayarlar."""
@@ -269,7 +345,8 @@ def run_baseline(data_dir: Path, out_dir: Path) -> None:
     from app.ecg.features import extract_features
 
     X, y, ids, _sub = load_cache(data_dir)
-    tr, va, te = stratified_split(y)
+    seed = 42
+    tr, va, te = stratified_split(y, seed=seed)
     print(f"split: train={len(tr)} val={len(va)} test={len(te)}")
 
     def feats(idxs: np.ndarray) -> np.ndarray:
@@ -290,8 +367,12 @@ def run_baseline(data_dir: Path, out_dir: Path) -> None:
     report = classification_report(y[te], pred, target_names=list(CLASS_NAMES), output_dict=True)
     macro_f1 = f1_score(y[te], pred, average="macro")
     cm = confusion_matrix(y[te], pred).tolist()
+    test_ids = [ids[i] for i in te]
     result = {"model": "HistGradientBoosting+handcrafted", "macro_f1": round(float(macro_f1), 4),
-              "bias": bias.round(3).tolist(), "report": report, "confusion_matrix": cm}
+              "bias": bias.round(3).tolist(), "report": report, "confusion_matrix": cm,
+              "per_class": per_class_metrics(y[te], pred, CLASS_NAMES),
+              "error_analysis": error_analysis(test_ids, y[te], pred, CLASS_NAMES),
+              "split": split_meta(seed, len(tr), len(va), len(te))}
     print(json.dumps(result, indent=2))
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "baseline_metrics.json").write_text(json.dumps(result, indent=2))
@@ -309,8 +390,9 @@ def run_deep(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int,
     torch.set_num_threads(max(1, __import__("os").cpu_count() - 1))
     dev = torch.device("cpu")
 
-    X, y, _ids, _sub = load_cache(data_dir)
-    tr, va, te = stratified_split(y, seed=cv_cfg.get("random_state", 42))
+    X, y, ids, _sub = load_cache(data_dir)
+    seed = cv_cfg.get("random_state", 42)
+    tr, va, te = stratified_split(y, seed=seed)
     counts = np.bincount(y[tr], minlength=N_CLASSES)
     alpha_cw = 1.0 / np.sqrt(np.maximum(counts, 1))
     alpha_cw = alpha_cw / alpha_cw.sum() * N_CLASSES
@@ -435,11 +517,15 @@ def run_deep(data_dir: Path, out_dir: Path, models_dir: Path, epochs: int,
          "loss": loss, "best_val_macro_f1": meta["best_val_macro_f1"],
          "bias": meta["bias"]}, indent=2))
 
+    test_ids = [ids[i] for i in te]
     metrics = {"model": "ECGResNet-1D", "test_macro_f1_raw": round(tf1_raw, 4),
                "test_macro_f1": round(tf1, 4), "best_val_macro_f1": meta["best_val_macro_f1"],
                "tuned_val_macro_f1": meta["tuned_val_macro_f1"], "bias": meta["bias"],
                "report": rep, "confusion_matrix": cm, "history": meta["history"],
-               "fold_eval": fold_table}
+               "fold_eval": fold_table,
+               "per_class": per_class_metrics(test_y, pred, CLASS_NAMES),
+               "error_analysis": error_analysis(test_ids, test_y, pred, CLASS_NAMES),
+               "split": split_meta(seed, len(tr), len(va), len(te))}
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "deep_metrics.json").write_text(json.dumps(metrics, indent=2))
     _plot(meta["history"], cm)
